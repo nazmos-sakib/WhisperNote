@@ -2,6 +2,7 @@ package app.naz.whispernote
 
 import android.content.Intent
 import android.os.Bundle
+import android.net.Uri
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -9,11 +10,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.staggeredgrid.*
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.automirrored.outlined.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
@@ -28,45 +27,98 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.core.content.FileProvider
 import app.naz.whispernote.core.*
 import app.naz.whispernote.ui.theme.WhisperNoteTheme
-import java.io.File
-import java.text.DateFormat
+import java.text.SimpleDateFormat
+import java.util.Locale
+import androidx.compose.ui.text.style.TextAlign
 import java.util.Date
 import kotlinx.coroutines.launch
 
 class MainActivity: ComponentActivity() {
     private val opened= kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
-    override fun onCreate(savedInstanceState: Bundle?) { super.onCreate(savedInstanceState); opened.value=intent.getStringExtra("noteId"); enableEdgeToEdge(); setContent { WhisperNoteTheme { val id by opened.collectAsState(); WhisperNote(id) } } }
-    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); opened.value=intent.getStringExtra("noteId") }
+    private val incoming= kotlinx.coroutines.flow.MutableStateFlow<Uri?>(null)
+    @Suppress("DEPRECATION")
+    private fun receive(intent: Intent) {
+        opened.value=intent.getStringExtra("noteId")
+        incoming.value=when(intent.action) {
+            Intent.ACTION_VIEW -> intent.data
+            Intent.ACTION_SEND -> intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
+            else -> null
+        }?.takeIf { it.scheme=="content" }
+    }
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState); receive(intent); enableEdgeToEdge()
+        setContent { WhisperNoteTheme {
+            val id by opened.collectAsState(); val uri by incoming.collectAsState()
+            WhisperNote(id,incoming=uri,consumeIncoming={incoming.value=null;setIntent(Intent(this,MainActivity::class.java))})
+        } }
+    }
+    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); receive(intent) }
 }
 @OptIn(ExperimentalMaterial3Api::class)
-@Composable fun WhisperNote(opened: String?,vm: NotesViewModel=viewModel()) {
+@Composable fun WhisperNote(opened: String?,vm: NotesViewModel=viewModel(), incoming: Uri? = null, consumeIncoming: () -> Unit = {}) {
     val notes by vm.notes.collectAsStateWithLifecycle()
     val error by vm.error.collectAsStateWithLifecycle()
+    val labels by vm.labels.collectAsStateWithLifecycle()
+    val transfer by vm.transfer.collectAsStateWithLifecycle()
+    val imported by vm.importedNote.collectAsStateWithLifecycle()
+    var labelFilter by rememberSaveable { mutableStateOf<String?>(null) }
+    var createLabel by remember { mutableStateOf(false) }
+    var renameLabel by remember { mutableStateOf<String?>(null) }
+    var deleteLabel by remember { mutableStateOf<String?>(null) }
+    val drawer=rememberDrawerState(DrawerValue.Closed)
+    val scope=rememberCoroutineScope()
+    LaunchedEffect(labels) { if(labelFilter!=null && labelFilter!="" && labelFilter !in labels) labelFilter=null }
     var selected by rememberSaveable { mutableStateOf<String?>(null) }
     var query by rememberSaveable { mutableStateOf("") }
     var importing by remember { mutableStateOf(false) }; var modelSheet by remember { mutableStateOf(false) }
     var model by rememberSaveable { mutableStateOf(vm.models.preferredModel) }
     var url by rememberSaveable { mutableStateOf("") }
     val context=LocalContext.current
-    val picker=rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { it?.let { vm.import(it,model) }; importing=false }
+    val picker=rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { it?.let { vm.import(it,model,labelFilter?.takeIf { it.isNotEmpty() }) }; importing=false }
+    val archivePicker=rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { it?.let(vm::importArchive) }
     val permission=rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
     LaunchedEffect(opened) { if(opened!=null) selected=opened }
+    LaunchedEffect(imported) { imported?.let { selected=it; vm.importedNote.value=null } }
     val note=notes.firstOrNull { it.id==selected }
     androidx.activity.compose.BackHandler(selected!=null) { selected=null }
     if(note!=null) { Detail(note,query,vm) { selected=null } }
-    else Scaffold(
-        topBar={ TopAppBar(title={ Text("WhisperNote",fontWeight=FontWeight.Bold) },actions={ TextButton(onClick={modelSheet=true}) { Icon(Icons.Outlined.Memory,null); Spacer(Modifier.width(6.dp)); Text("Models") } }) },
+    else ModalNavigationDrawer(drawerState=drawer,drawerContent={
+        ModalDrawerSheet {
+            Column(Modifier.verticalScroll(rememberScrollState()).padding(12.dp)) {
+                Text("WhisperNote",style=MaterialTheme.typography.headlineSmall,modifier=Modifier.padding(16.dp))
+                NavigationDrawerItem(label={Text("All notes · ${notes.size}")},selected=labelFilter==null,onClick={labelFilter=null;scope.launch {drawer.close()}},icon={Icon(Icons.AutoMirrored.Outlined.Notes,null)})
+                NavigationDrawerItem(label={Text("Unlabelled · ${notes.count { it.label==null }}")},selected=labelFilter=="",onClick={labelFilter="";scope.launch {drawer.close()}},icon={Icon(Icons.AutoMirrored.Outlined.LabelOff,null)})
+                HorizontalDivider(Modifier.padding(vertical=12.dp))
+                Text("LABELS",modifier=Modifier.padding(16.dp),style=MaterialTheme.typography.labelMedium)
+                labels.forEach { label ->
+                    NavigationDrawerItem(label={Text("$label · ${notes.count {it.label==label}}")},selected=labelFilter==label,onClick={labelFilter=label;scope.launch {drawer.close()}},icon={Icon(Icons.AutoMirrored.Outlined.Label,null)},badge={
+                        var menu by remember { mutableStateOf(false) }
+                        Box { IconButton(onClick={menu=true}) {Icon(Icons.Outlined.MoreVert,"Manage $label")}
+                            DropdownMenu(menu,{menu=false}) {
+                                DropdownMenuItem(text={Text("Rename")},onClick={menu=false;renameLabel=label})
+                                DropdownMenuItem(text={Text("Delete label")},onClick={menu=false;deleteLabel=label})
+                            }
+                        }
+                    })
+                }
+                NavigationDrawerItem(label={Text("Create label")},selected=false,onClick={createLabel=true},icon={Icon(Icons.Outlined.Add,null)})
+                HorizontalDivider(Modifier.padding(vertical=12.dp))
+                NavigationDrawerItem(label={Text("Models")},selected=false,onClick={scope.launch {drawer.close();modelSheet=true}},icon={Icon(Icons.Outlined.Memory,null)})
+                NavigationDrawerItem(label={Text("Import complete note")},selected=false,onClick={if(transfer==null) {scope.launch {drawer.close()};archivePicker.launch(arrayOf("*/*"))}},icon={Icon(Icons.Outlined.FileOpen,null)})
+            }
+        }
+    }) { Scaffold(
+        topBar={ TopAppBar(title={ Text(labelFilter?.ifEmpty { "Unlabelled" } ?: "WhisperNote",fontWeight=FontWeight.Bold) },navigationIcon={IconButton(onClick={scope.launch {drawer.open()}}) {Icon(Icons.Outlined.Menu,"Open navigation drawer")}}) },
         floatingActionButton={ ExtendedFloatingActionButton(onClick={importing=true},icon={Icon(Icons.Outlined.Add,null)},text={Text("New transcription")}) }
     ) { padding -> Column(Modifier.fillMaxSize().padding(padding).padding(horizontal=20.dp)) {
         Text("A little space for every spoken thought.",style=MaterialTheme.typography.bodyLarge,color=MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(20.dp))
         OutlinedTextField(query,{query=it},Modifier.fillMaxWidth(),placeholder={Text("Search your notes")},leadingIcon={Icon(Icons.Outlined.Search,null)},singleLine=true,shape=RoundedCornerShape(28.dp))
         Spacer(Modifier.height(20.dp))
-        val filtered=notes.filter { query.isBlank() || it.title.contains(query,true) || it.segments.any { s -> s.text.contains(query,true) } }
-        Text(if(query.isBlank()) "YOUR LIBRARY · ${notes.size}" else "${filtered.size} RESULTS",style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
+        val filtered=notes.filter { (labelFilter==null || if(labelFilter=="") it.label==null else it.label==labelFilter) }.filter { query.isBlank() || it.title.contains(query,true) || it.segments.any { s -> s.text.contains(query,true) } }
+        Text(if(query.isBlank()) "YOUR LIBRARY · ${filtered.size}" else "${filtered.size} RESULTS",style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(12.dp))
         if(filtered.isEmpty()) Box(Modifier.fillMaxSize().padding(bottom=100.dp),contentAlignment=Alignment.Center) { Column(horizontalAlignment=Alignment.CenterHorizontally) {
             Icon(Icons.Outlined.GraphicEq,null,Modifier.size(56.dp),tint=MaterialTheme.colorScheme.primary)
@@ -76,30 +128,45 @@ class MainActivity: ComponentActivity() {
             items(filtered,key={it.id}) { n -> NoteCard(n) {selected=n.id} }
         }
     } }
+    }
     if(importing) ModalBottomSheet(onDismissRequest={importing=false}) { Column(Modifier.verticalScroll(rememberScrollState()).padding(24.dp).imePadding().navigationBarsPadding(),verticalArrangement=Arrangement.spacedBy(16.dp)) {
         Text("Turn audio into a note",style=MaterialTheme.typography.headlineSmall)
         Text("Your audio stays on this device. Download a multilingual model once, then transcribe offline.",color=MaterialTheme.colorScheme.onSurfaceVariant)
         ModelPicker(model) { model=it; vm.models.preferredModel=it }
         if(!vm.models.ready(model)) Text("Download ${ModelCatalog.get(model).displayName} in Models before transcription.",color=MaterialTheme.colorScheme.primary)
         Button(onClick={if(android.os.Build.VERSION.SDK_INT>=33) permission.launch(android.Manifest.permission.POST_NOTIFICATIONS); picker.launch(arrayOf("audio/*","video/mp4","application/ogg"))},Modifier.fillMaxWidth()) { Icon(Icons.Outlined.AudioFile,null); Spacer(Modifier.width(8.dp)); Text("Choose audio file") }
+        OutlinedButton(onClick={importing=false;archivePicker.launch(arrayOf("*/*"))},enabled=transfer==null,modifier=Modifier.fillMaxWidth()) {Text("Import complete note (.whispernote)")}
         HorizontalDivider()
         OutlinedTextField(url,{url=it},Modifier.fillMaxWidth(),label={Text("Direct HTTPS audio URL")},singleLine=true)
-        OutlinedButton(onClick={vm.importUrl(url.trim(),model); importing=false; url=""},enabled=url.isNotBlank(),modifier=Modifier.fillMaxWidth()) { Text("Download audio") }
+        OutlinedButton(onClick={vm.importUrl(url.trim(),model,labelFilter?.takeIf {it.isNotEmpty()}); importing=false; url=""},enabled=url.isNotBlank(),modifier=Modifier.fillMaxWidth()) { Text("Download audio") }
     } }
+    if(incoming!=null) AlertDialog(onDismissRequest=consumeIncoming,title={Text("Import complete note?")},text={Text("Add a local copy of the audio, transcript and label to your library. Existing notes will stay as they are.")},confirmButton={TextButton(onClick={vm.importArchive(incoming);consumeIncoming()},enabled=transfer==null) {Text("Import")}},dismissButton={TextButton(onClick=consumeIncoming) {Text("Cancel")}})
+    if(createLabel) LabelNameDialog(null,{vm.createLabel(it);createLabel=false},{createLabel=false})
+    renameLabel?.let { old -> LabelNameDialog(old,{vm.renameLabel(old,it); if(labelFilter==old) labelFilter=it;renameLabel=null},{renameLabel=null}) }
+    deleteLabel?.let { label -> AlertDialog(onDismissRequest={deleteLabel=null},title={Text("Delete label?")},text={Text("Notes in “$label” will become unlabelled. No notes or audio will be deleted.")},confirmButton={TextButton(onClick={vm.deleteLabel(label);deleteLabel=null}) {Text("Delete label")}},dismissButton={TextButton(onClick={deleteLabel=null}) {Text("Cancel")}}) }
+    if(transfer!=null) AlertDialog(onDismissRequest={},title={Text(transfer!!)},text={Column {LinearProgressIndicator(Modifier.fillMaxWidth());Text("Large audio files can take a little while.")}},confirmButton={})
     if(modelSheet) ModalBottomSheet(onDismissRequest={modelSheet=false}) { Models(vm) }
     if(error!=null) AlertDialog(onDismissRequest={vm.error.value=null},title={Text("Something went wrong")},text={Text(error!!)},confirmButton={TextButton(onClick={vm.error.value=null}) {Text("OK")}})
 }
 @Composable fun NoteCard(n: Note,onClick:()->Unit) {
     val colors=listOf(MaterialTheme.colorScheme.secondaryContainer,MaterialTheme.colorScheme.tertiaryContainer,MaterialTheme.colorScheme.surfaceContainerHigh)
-    Card(onClick=onClick,shape=RoundedCornerShape(20.dp),colors=CardDefaults.cardColors(containerColor=colors[(n.id.hashCode() and Int.MAX_VALUE)%colors.size]),modifier=Modifier.fillMaxWidth().heightIn(min=175.dp,max=320.dp)) {
+    Card(onClick=onClick,shape=RoundedCornerShape(20.dp),colors=CardDefaults.cardColors(containerColor=colors[(n.id.hashCode() and Int.MAX_VALUE)%colors.size]),modifier=Modifier.fillMaxWidth().heightIn(min=175.dp,max=360.dp)) {
         Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
-            Icon(Icons.Outlined.GraphicEq,null,tint=MaterialTheme.colorScheme.primary,modifier=Modifier.size(22.dp))
+            Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
+                Icon(Icons.Outlined.GraphicEq,null,tint=MaterialTheme.colorScheme.primary,modifier=Modifier.size(22.dp))
+                Box(Modifier.weight(1f).padding(start=8.dp),contentAlignment=Alignment.CenterEnd) {
+                    n.label?.takeIf { it.isNotBlank() }?.let { label ->
+                        Text(label,modifier=Modifier.widthIn(max=120.dp),maxLines=1,softWrap=false,
+                            overflow=TextOverflow.Ellipsis,textAlign=TextAlign.End,style=MaterialTheme.typography.labelSmall)
+                    }
+                }
+            }
             Text(n.title.ifBlank { "Untitled note" },fontWeight=FontWeight.SemiBold,maxLines=2,overflow=TextOverflow.Ellipsis)
             if(n.busy) { Text(n.status+if(n.progress>0) " · ${n.progress}%" else "…",style=MaterialTheme.typography.bodySmall); LinearProgressIndicator(modifier=Modifier.fillMaxWidth()) }
             if(n.resumable) Text(if(n.checkpointMs>0) "Incomplete · saved through ${timestamp(n.checkpointMs)}" else "Incomplete · tap to retry",style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.error)
             if(n.segments.isNotEmpty() || !n.busy) Text(n.segments.joinToString(" ") {it.text}.ifBlank { if(n.resumable) n.error ?: "Tap to retry" else "No speech detected" },maxLines=4,overflow=TextOverflow.Ellipsis,style=MaterialTheme.typography.bodyMedium)
             Text("${timestamp(n.duration)}  ·  ${n.language.uppercase().ifBlank {if(n.source==null) "FILE" else "URL"}}",style=MaterialTheme.typography.labelSmall)
-            Text(DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(n.created)),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(remember(n.created) { SimpleDateFormat("d MMM yyyy",Locale.ENGLISH).format(Date(n.created)) },style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

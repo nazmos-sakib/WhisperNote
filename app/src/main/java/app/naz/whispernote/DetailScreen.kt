@@ -11,6 +11,8 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -24,6 +26,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.Label
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -79,6 +82,9 @@ fun Detail(n: Note, query: String, vm: NotesViewModel, back: () -> Unit) {
     val scope = rememberCoroutineScope()
     var deleting by remember { mutableStateOf(false) }
     var deleteAudio by remember { mutableStateOf(true) }
+    val labels by vm.labels.collectAsStateWithLifecycle()
+    var choosingLabel by remember { mutableStateOf(false) }
+    val archiveSave=rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(NoteArchive.MIME)) { uri -> uri?.let {vm.exportArchive(n,it)} }
     var export by remember { mutableStateOf(false) }
     var exportFormat by rememberSaveable { mutableStateOf("txt") }
     val save = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
@@ -97,8 +103,9 @@ fun Detail(n: Note, query: String, vm: NotesViewModel, back: () -> Unit) {
         onTogglePlayback = { player?.toggle() },
         onSeek = { position, play -> player?.seek(position, play) },
         onRetry = { vm.start(n.id) }, onExport = { export = true },
-        onDeleteNote = { deleting = true }, onBack = back
+        onDeleteNote = { deleting = true }, onBack = back, onLabel = { choosingLabel=true }
     )
+    if(choosingLabel) LabelPicker(labels,n.label,{vm.assignLabel(n.id,it)},vm::createLabel,{choosingLabel=false})
     if (deleting) AlertDialog(
         onDismissRequest = { deleting = false }, title = { Text("Delete this note?") },
         text = { Column {
@@ -112,7 +119,20 @@ fun Detail(n: Note, query: String, vm: NotesViewModel, back: () -> Unit) {
     )
     if (export) AlertDialog(
         onDismissRequest = { export = false }, title = { Text("Export your transcript") },
-        text = { Column {
+        text = { Column(Modifier.verticalScroll(rememberScrollState())) {
+            Text("Complete note",style=MaterialTheme.typography.titleMedium)
+            Text("Includes original audio, text, timestamps and label. The recipient can import it into WhisperNote.",style=MaterialTheme.typography.bodySmall)
+            Row {
+                TextButton(onClick={archiveSave.launch("${safeName(n.title)}.whispernote");export=false},enabled=n.audio.isNotBlank()) {Text("Save complete note")}
+                TextButton(onClick={
+                    export=false
+                    vm.exportArchive(n,null) { file ->
+                        val uri=FileProvider.getUriForFile(context,"${context.packageName}.files",file)
+                        context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType(NoteArchive.MIME).putExtra(Intent.EXTRA_STREAM,uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),"Share complete note"))
+                    }
+                },enabled=n.audio.isNotBlank()) {Text("Share")}
+            }
+            HorizontalDivider()
             listOf("txt", "md", "srt").forEach { format -> Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(format.uppercase(), Modifier.weight(1f))
                 TextButton(onClick = { exportFormat = format; save.launch("${safeName(n.title)}.$format"); export = false }) { Text("Save") }
@@ -149,7 +169,8 @@ internal fun TranscriptDetailContent(
     onExport: () -> Unit,
     onDeleteNote: () -> Unit,
     onBack: () -> Unit,
-    list: LazyListState = rememberLazyListState()
+    list: LazyListState = rememberLazyListState(),
+    onLabel: () -> Unit = {}
 ) {
     var title by rememberSaveable(n.id) { mutableStateOf(n.title) }
     var editingId by rememberSaveable(n.id) { mutableStateOf<String?>(null) }
@@ -194,7 +215,8 @@ internal fun TranscriptDetailContent(
             title = { Text("Audio note") },
             navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") } },
             actions = {
-                IconButton(onClick = onExport, enabled = n.segments.isNotEmpty()) { Icon(Icons.Outlined.IosShare, "Export") }
+                IconButton(onClick=onLabel) {Icon(Icons.AutoMirrored.Outlined.Label,"Change label")}
+                IconButton(onClick = onExport, enabled = n.segments.isNotEmpty() || n.audio.isNotBlank()) { Icon(Icons.Outlined.IosShare, "Export") }
                 IconButton(onClick = onDeleteNote, enabled = !n.busy) { Icon(Icons.Outlined.DeleteOutline, "Delete note") }
             }
         )
@@ -209,6 +231,7 @@ internal fun TranscriptDetailContent(
                     BasicTextField(title, { title = it; onTitleChange(it) }, Modifier.fillMaxWidth(),
                         textStyle = MaterialTheme.typography.headlineMedium.copy(color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold),
                         decorationBox = { inner -> if (title.isEmpty()) Text("Untitled note", style = MaterialTheme.typography.headlineMedium); inner() })
+                    TextButton(onClick=onLabel) {Text(n.label ?: "Add label")}
                     Spacer(Modifier.height(8.dp))
                     Text("${DateFormat.getDateInstance().format(Date(n.created))} · ${ModelCatalog.models.firstOrNull { it.id == n.model }?.displayName ?: n.model} · ${n.language.ifBlank { "Auto language" }}",
                         style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)

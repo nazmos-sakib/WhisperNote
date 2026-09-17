@@ -1,0 +1,9 @@
+Labels and complete-note archives — 2026-09-17
+Device: A015
+Build: testDebugUnitTest, lintDebug, assembleDebug, assembleDebugAndroidTest successful.
+JVM: 16 tests, 0 failures.
+Device: NoteOrganizationTest (4), LabelUiTest (3), DetailInteractionTest (3), TranscriptUiTest (2).
+Final instrument result: OK (12 tests), 15.195 seconds.
+Verified label persistence, rename/delete, legacy notes, byte-identical audio round trip, timestamped text, malformed archive cleanup, drawer filtering, label assignment, and existing playback behavior.
+An earlier malformed archive test expected IllegalStateException; this Android device rejected the unsafe path earlier with ZipException. The test now accepts either rejection and verifies audio cleanup. No production path validation was weakened.
+Final main APK installed with adb install -r; app data preserved. Temporary test APK uninstalled after verification.

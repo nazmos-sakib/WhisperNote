@@ -116,3 +116,15 @@ The detail screen keeps playback controls above the transcript viewport. Scrolli
 Each segment has an autosaved edit action and a confirmed delete action. Segment IDs are persisted, with backward-compatible IDs for existing notes, so queued edits cannot target a different segment after deletion. Deleting text preserves audio, timestamps of remaining segments, and the processing checkpoint.
 
 Verification: JVM tests and debug lint/build passed. Five detail UI tests passed on Pixel 6a, covering centering, manual interruption, pinned compact playback, confirmed deletion, incomplete transcript state, and live segment updates.
+
+### Labels and portable complete notes
+
+Open the navigation drawer for **All notes**, **Unlabelled**, and saved labels with note counts. A note can belong to one label, like a folder. Create labels in the drawer or label picker; use the label action on a note to move it or remove its label. Label menus support rename and confirmed deletion. Deleting a label leaves its notes and audio intact. Search applies within the selected view. Audio imported while viewing a label inherits that label.
+
+In a note's export dialog, **Save complete note** or **Share** packages the original audio and transcript as a `.whispernote` file. The recipient uses **Import complete note** in the drawer or new-note sheet. Apps preserving the `application/vnd.whispernote` MIME type can also open/share directly into WhisperNote with an import confirmation. If a messenger changes the file's MIME type, save the attachment and use the in-app picker.
+
+The version-1 format is ZIP with exactly `note.json` and `audio`. Metadata preserves title, creation/modification dates, duration, language, model identifier, label, completion/checkpoint state, and edited segments with millisecond timestamps. Device-local file paths and Whisper model binaries are excluded. Imports receive fresh note/segment IDs and an owned audio copy; existing notes are never overwritten. Matching label names are reused case-insensitively. Reading and playback work offline without a model; continuing an imported partial transcript requires its model.
+
+Transfers run off the UI thread with a busy indicator. Archives are limited to 16 MiB of metadata and 4 GiB of audio; unknown entries, unsupported versions and invalid timestamps are rejected. Entry paths are never used for extraction, and failed imports remove their copied audio. Shared files are kept in app cache so receiving applications can finish reading them.
+
+Validation: JVM tests, Android lint (no errors), and APK builds passed. Device coverage includes label persistence/rename/deletion, backwards-compatible unlabelled notes, complete-note audio/text round trips, malformed archive cleanup, label picker and drawer filtering, and the existing detail playback/transcript checks.
