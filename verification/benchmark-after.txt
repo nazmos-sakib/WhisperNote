@@ -1,0 +1,92 @@
+
+app.naz.whispernote.PerformanceBenchmarkTest:
+BENCHMARK optimized model=tiny run=1 audioMs=11000 decodeMs=315 loadMs=246 inferenceMs=4850 totalMs=5096 firstSegmentMs=5061 segments=1 thermal=0
+
+BENCHMARK optimized model=tiny run=2 audioMs=11000 decodeMs=315 loadMs=132 inferenceMs=4921 totalMs=5053 firstSegmentMs=5012 segments=1 thermal=0
+
+BENCHMARK optimized model=tiny-q5_1 run=1 audioMs=11000 decodeMs=315 loadMs=91 inferenceMs=4128 totalMs=4219 firstSegmentMs=4183 segments=1 thermal=0
+
+BENCHMARK optimized model=tiny-q5_1 run=2 audioMs=11000 decodeMs=315 loadMs=87 inferenceMs=4200 totalMs=4287 firstSegmentMs=4247 segments=1 thermal=0
+
+BENCHMARK optimized model=base-q5_1 run=1 audioMs=11000 decodeMs=315 loadMs=119 inferenceMs=9301 totalMs=9420 firstSegmentMs=9379 segments=1 thermal=0
+
+BENCHMARK optimized model=base-q5_1 run=2 audioMs=11000 decodeMs=315 loadMs=115 inferenceMs=9258 totalMs=9373 firstSegmentMs=9331 segments=1 thermal=0
+
+BENCHMARK optimized model=small-q5_1 run=1 audioMs=11000 decodeMs=315 loadMs=263 inferenceMs=32778 totalMs=33041 firstSegmentMs=32975 segments=1 thermal=0
+
+BENCHMARK optimized model=small-q5_1 run=2 audioMs=11000 decodeMs=315 loadMs=260 inferenceMs=32851 totalMs=33111 firstSegmentMs=33046 segments=1 thermal=0
+.
+app.naz.whispernote.ResumeTranscriptionTest:.
+app.naz.whispernote.ModelPickerTest:
+Error in chooseCompactSmallAndSwitchBackToStandard(app.naz.whispernote.ModelPickerTest):
+java.lang.IllegalStateException: No compose hierarchies found in the app. Possible reasons include: (1) the Activity that calls setContent did not launch; (2) setContent was not called; (3) setContent was called before the ComposeTestRule ran. If setContent is called by the Activity, make sure the Activity is launched after the ComposeTestRule runs
+	at androidx.compose.ui.test.TestOwnerKt.getAllSemanticsNodes(TestOwner.kt:106)
+	at androidx.compose.ui.test.SemanticsNodeInteraction.fetchSemanticsNodes$ui_test(SemanticsNodeInteraction.kt:64)
+	at androidx.compose.ui.test.SemanticsNodeInteraction.fetchOneOrThrow(SemanticsNodeInteraction.kt:157)
+	at androidx.compose.ui.test.SemanticsNodeInteraction.fetchOneOrThrow$default(SemanticsNodeInteraction.kt:150)
+	at androidx.compose.ui.test.SemanticsNodeInteraction.fetchSemanticsNode(SemanticsNodeInteraction.kt:84)
+	at androidx.compose.ui.test.ActionsKt.performTouchInput(Actions.kt:402)
+	at androidx.compose.ui.test.AndroidActions.performClickImpl(Actions.android.kt:23)
+	at androidx.compose.ui.test.ActionsKt.performClick(Actions.kt:60)
+	at app.naz.whispernote.ModelPickerTest.chooseCompactSmallAndSwitchBackToStandard(ModelPickerTest.kt:17)
+
+app.naz.whispernote.TranscriptUiTest:
+Error in interruptedTranscriptShowsSavedTextAndResumeTimestamp(app.naz.whispernote.TranscriptUiTest):
+java.lang.IllegalStateException: No compose hierarchies found in the app. Possible reasons include: (1) the Activity that calls setContent did not launch; (2) setContent was not called; (3) setContent was called before the ComposeTestRule ran. If setContent is called by the Activity, make sure the Activity is launched after the ComposeTestRule runs
+	at androidx.compose.ui.test.TestOwnerKt.getAllSemanticsNodes(TestOwner.kt:106)
+	at androidx.compose.ui.test.SemanticsNodeInteraction.fetchSemanticsNodes$ui_test(SemanticsNodeInteraction.kt:64)
+	at androidx.compose.ui.test.SemanticsNodeInteraction.fetchOneOrThrow(SemanticsNodeInteraction.kt:157)
+	at androidx.compose.ui.test.SemanticsNodeInteraction.fetchOneOrThrow$default(SemanticsNodeInteraction.kt:150)
+	at androidx.compose.ui.test.SemanticsNodeInteraction.assertExists(SemanticsNodeInteraction.kt:125)
+	at androidx.compose.ui.test.SemanticsNodeInteraction.assertExists$default(SemanticsNodeInteraction.kt:124)
+	at app.naz.whispernote.TranscriptUiTest.interruptedTranscriptShowsSavedTextAndResumeTimestamp(TranscriptUiTest.kt:22)
+
+Error in newFinalizedSegmentAppearsWithoutLeavingDetail(app.naz.whispernote.TranscriptUiTest):
+java.lang.IllegalStateException: No compose hierarchies found in the app. Possible reasons include: (1) the Activity that calls setContent did not launch; (2) setContent was not called; (3) setContent was called before the ComposeTestRule ran. If setContent is called by the Activity, make sure the Activity is launched after the ComposeTestRule runs
+	at androidx.compose.ui.test.TestOwnerKt.getAllSemanticsNodes(TestOwner.kt:106)
+	at androidx.compose.ui.test.SemanticsNodeInteraction.fetchSemanticsNodes$ui_test(SemanticsNodeInteraction.kt:64)
+	at androidx.compose.ui.test.SemanticsNodeInteraction.fetchOneOrThrow(SemanticsNodeInteraction.kt:157)
+	at androidx.compose.ui.test.SemanticsNodeInteraction.fetchOneOrThrow$default(SemanticsNodeInteraction.kt:150)
+	at androidx.compose.ui.test.SemanticsNodeInteraction.fetchSemanticsNode(SemanticsNodeInteraction.kt:84)
+	at androidx.compose.ui.test.ActionsKt.scrollToMatchingDescendantOrReturnScrollable(Actions.kt:277)
+	at androidx.compose.ui.test.ActionsKt.performScrollToNode(Actions.kt:236)
+	at app.naz.whispernote.TranscriptUiTest.newFinalizedSegmentAppearsWithoutLeavingDetail(TranscriptUiTest.kt:34)
+
+
+Time: 227,519
+There were 3 failures:
+1) chooseCompactSmallAndSwitchBackToStandard(app.naz.whispernote.ModelPickerTest)
+java.lang.IllegalStateException: No compose hierarchies found in the app. Possible reasons include: (1) the Activity that calls setContent did not launch; (2) setContent was not called; (3) setContent was called before the ComposeTestRule ran. If setContent is called by the Activity, make sure the Activity is launched after the ComposeTestRule runs
+	at androidx.compose.ui.test.TestOwnerKt.getAllSemanticsNodes(TestOwner.kt:106)
+	at androidx.compose.ui.test.SemanticsNodeInteraction.fetchSemanticsNodes$ui_test(SemanticsNodeInteraction.kt:64)
+	at androidx.compose.ui.test.SemanticsNodeInteraction.fetchOneOrThrow(SemanticsNodeInteraction.kt:157)
+	at androidx.compose.ui.test.SemanticsNodeInteraction.fetchOneOrThrow$default(SemanticsNodeInteraction.kt:150)
+	at androidx.compose.ui.test.SemanticsNodeInteraction.fetchSemanticsNode(SemanticsNodeInteraction.kt:84)
+	at androidx.compose.ui.test.ActionsKt.performTouchInput(Actions.kt:402)
+	at androidx.compose.ui.test.AndroidActions.performClickImpl(Actions.android.kt:23)
+	at androidx.compose.ui.test.ActionsKt.performClick(Actions.kt:60)
+	at app.naz.whispernote.ModelPickerTest.chooseCompactSmallAndSwitchBackToStandard(ModelPickerTest.kt:17)
+2) interruptedTranscriptShowsSavedTextAndResumeTimestamp(app.naz.whispernote.TranscriptUiTest)
+java.lang.IllegalStateException: No compose hierarchies found in the app. Possible reasons include: (1) the Activity that calls setContent did not launch; (2) setContent was not called; (3) setContent was called before the ComposeTestRule ran. If setContent is called by the Activity, make sure the Activity is launched after the ComposeTestRule runs
+	at androidx.compose.ui.test.TestOwnerKt.getAllSemanticsNodes(TestOwner.kt:106)
+	at androidx.compose.ui.test.SemanticsNodeInteraction.fetchSemanticsNodes$ui_test(SemanticsNodeInteraction.kt:64)
+	at androidx.compose.ui.test.SemanticsNodeInteraction.fetchOneOrThrow(SemanticsNodeInteraction.kt:157)
+	at androidx.compose.ui.test.SemanticsNodeInteraction.fetchOneOrThrow$default(SemanticsNodeInteraction.kt:150)
+	at androidx.compose.ui.test.SemanticsNodeInteraction.assertExists(SemanticsNodeInteraction.kt:125)
+	at androidx.compose.ui.test.SemanticsNodeInteraction.assertExists$default(SemanticsNodeInteraction.kt:124)
+	at app.naz.whispernote.TranscriptUiTest.interruptedTranscriptShowsSavedTextAndResumeTimestamp(TranscriptUiTest.kt:22)
+3) newFinalizedSegmentAppearsWithoutLeavingDetail(app.naz.whispernote.TranscriptUiTest)
+java.lang.IllegalStateException: No compose hierarchies found in the app. Possible reasons include: (1) the Activity that calls setContent did not launch; (2) setContent was not called; (3) setContent was called before the ComposeTestRule ran. If setContent is called by the Activity, make sure the Activity is launched after the ComposeTestRule runs
+	at androidx.compose.ui.test.TestOwnerKt.getAllSemanticsNodes(TestOwner.kt:106)
+	at androidx.compose.ui.test.SemanticsNodeInteraction.fetchSemanticsNodes$ui_test(SemanticsNodeInteraction.kt:64)
+	at androidx.compose.ui.test.SemanticsNodeInteraction.fetchOneOrThrow(SemanticsNodeInteraction.kt:157)
+	at androidx.compose.ui.test.SemanticsNodeInteraction.fetchOneOrThrow$default(SemanticsNodeInteraction.kt:150)
+	at androidx.compose.ui.test.SemanticsNodeInteraction.fetchSemanticsNode(SemanticsNodeInteraction.kt:84)
+	at androidx.compose.ui.test.ActionsKt.scrollToMatchingDescendantOrReturnScrollable(Actions.kt:277)
+	at androidx.compose.ui.test.ActionsKt.performScrollToNode(Actions.kt:236)
+	at app.naz.whispernote.TranscriptUiTest.newFinalizedSegmentAppearsWithoutLeavingDetail(TranscriptUiTest.kt:34)
+
+FAILURES!!!
+Tests run: 5,  Failures: 3
+
+

@@ -1,0 +1,12 @@
+
+app.naz.whispernote.PerformanceBenchmarkTest:
+BENCHMARK unoptimized model=tiny run=1 audioMs=11000 decodeMs=307 loadMs=623 inferenceMs=70876 totalMs=71499 firstSegmentMs=71383 segments=1 thermal=0
+
+BENCHMARK unoptimized model=tiny run=2 audioMs=11000 decodeMs=307 loadMs=560 inferenceMs=70886 totalMs=71446 firstSegmentMs=71318 segments=1 thermal=0
+.
+
+Time: 143,28
+
+OK (1 test)
+
+

@@ -1,0 +1,9 @@
+
+app.naz.whispernote.ModelPickerTest:.
+app.naz.whispernote.TranscriptUiTest:..
+
+Time: 3,95
+
+OK (3 tests)
+
+

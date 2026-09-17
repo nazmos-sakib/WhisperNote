@@ -1,0 +1,359 @@
+package app.naz.whispernote
+
+import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.core.content.FileProvider
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.naz.whispernote.core.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.text.DateFormat
+import java.util.Date
+import kotlin.math.abs
+
+/** Owns playback and persistence; the content below is also usable with deterministic playback in tests. */
+@Composable
+fun Detail(n: Note, query: String, vm: NotesViewModel, back: () -> Unit) {
+    val context = LocalContext.current
+    val player = remember(n.id, n.audio) { n.audio.takeIf { it.isNotEmpty() }?.let { AudioPlayer(context, it) } }
+    DisposableEffect(player) { onDispose { player?.release() } }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(player, lifecycle) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP && player?.state?.value?.playing == true) player.toggle()
+        }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) }
+    }
+    val emptyPlayback = remember { kotlinx.coroutines.flow.MutableStateFlow(Playback()) }
+    val playback by (player?.state ?: emptyPlayback).collectAsStateWithLifecycle()
+    val scope = rememberCoroutineScope()
+    var deleting by remember { mutableStateOf(false) }
+    var deleteAudio by remember { mutableStateOf(true) }
+    var export by remember { mutableStateOf(false) }
+    var exportFormat by rememberSaveable { mutableStateOf("txt") }
+    val save = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
+        uri?.let { scope.launch(Dispatchers.IO) {
+            try {
+                requireNotNull(context.contentResolver.openOutputStream(it)).bufferedWriter().use { out -> out.write(Exporter.render(n, exportFormat)) }
+            } catch (e: Exception) { vm.error.value = e.message }
+        } }
+    }
+
+    TranscriptDetailContent(
+        n = n, query = query, playback = playback,
+        onTitleChange = { vm.title(n.id, it) },
+        onSegmentChange = { id, text -> vm.segment(n.id, id, text) },
+        onDeleteSegment = { vm.deleteSegment(n.id, it) },
+        onTogglePlayback = { player?.toggle() },
+        onSeek = { position, play -> player?.seek(position, play) },
+        onRetry = { vm.start(n.id) }, onExport = { export = true },
+        onDeleteNote = { deleting = true }, onBack = back
+    )
+    if (deleting) AlertDialog(
+        onDismissRequest = { deleting = false }, title = { Text("Delete this note?") },
+        text = { Column {
+            Text("The transcript will be permanently deleted.")
+            if (n.owned) Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(deleteAudio, { deleteAudio = it }); Text("Also delete the imported audio copy")
+            }
+        } },
+        confirmButton = { TextButton(onClick = { vm.delete(n, deleteAudio); deleting = false; back() }) { Text("Delete") } },
+        dismissButton = { TextButton(onClick = { deleting = false }) { Text("Cancel") } }
+    )
+    if (export) AlertDialog(
+        onDismissRequest = { export = false }, title = { Text("Export your transcript") },
+        text = { Column {
+            listOf("txt", "md", "srt").forEach { format -> Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(format.uppercase(), Modifier.weight(1f))
+                TextButton(onClick = { exportFormat = format; save.launch("${safeName(n.title)}.$format"); export = false }) { Text("Save") }
+                TextButton(onClick = {
+                    scope.launch(Dispatchers.IO) {
+                        try {
+                            val file = File(context.cacheDir, "exports").apply { mkdirs() }.resolve("${safeName(n.title)}.$format")
+                            file.writeText(Exporter.render(n, format))
+                            val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", file)
+                            val intent = Intent(Intent.ACTION_SEND).setType(if (format == "srt") "application/x-subrip" else "text/plain")
+                                .putExtra(Intent.EXTRA_STREAM, uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                            withContext(Dispatchers.Main) { context.startActivity(Intent.createChooser(intent, "Share transcript")) }
+                        } catch (e: Exception) { vm.error.value = e.message }
+                    }
+                    export = false
+                }) { Text("Share") }
+            } }
+        } }, confirmButton = { TextButton(onClick = { export = false }) { Text("Close") } }
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun TranscriptDetailContent(
+    n: Note,
+    query: String,
+    playback: Playback,
+    onTitleChange: (String) -> Unit,
+    onSegmentChange: (String, String) -> Unit,
+    onDeleteSegment: (String) -> Unit,
+    onTogglePlayback: () -> Unit,
+    onSeek: (Long, Boolean) -> Unit,
+    onRetry: () -> Unit,
+    onExport: () -> Unit,
+    onDeleteNote: () -> Unit,
+    onBack: () -> Unit,
+    list: LazyListState = rememberLazyListState()
+) {
+    var title by rememberSaveable(n.id) { mutableStateOf(n.title) }
+    var editingId by rememberSaveable(n.id) { mutableStateOf<String?>(null) }
+    var deletingId by rememberSaveable(n.id) { mutableStateOf<String?>(null) }
+    var follow by rememberSaveable(n.id) { mutableStateOf(false) }
+    // Keep centering space after a manual interruption to avoid a sudden layout jump under the finger.
+    var reserveCenterSpace by rememberSaveable(n.id) { mutableStateOf(false) }
+    var viewportHeight by remember { mutableIntStateOf(0) }
+    val compact by remember { derivedStateOf { follow || editingId != null || list.canScrollBackward } }
+    val activeIndex = n.segments.indexOfFirst { playback.position >= it.start && playback.position < it.end }
+    val activeId = n.segments.getOrNull(activeIndex)?.id
+    val manualInteraction = rememberUpdatedState { follow = false }
+    val manualScroll = remember {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (source == NestedScrollSource.UserInput && available.y != 0f) manualInteraction.value()
+                return Offset.Zero
+            }
+        }
+    }
+    fun setFollowing(enabled: Boolean) {
+        follow = enabled
+        if (enabled) { reserveCenterSpace = true; editingId = null }
+    }
+    // Never use isScrollInProgress to distinguish user input: our own animation also sets that flag.
+    // Viewport changes restart alignment once the expanding/collapsing player has settled.
+    LaunchedEffect(follow, activeId, viewportHeight, n.segments.size) {
+        if (follow && activeId != null && viewportHeight > 0) list.centerSegment(activeIndex + 2, activeId)
+    }
+    LaunchedEffect(follow, list.firstVisibleItemIndex, list.firstVisibleItemScrollOffset) {
+        if (!follow && list.firstVisibleItemIndex == 0 && list.firstVisibleItemScrollOffset == 0) reserveCenterSpace = false
+    }
+    LaunchedEffect(n.id, query) {
+        if (query.isNotBlank()) {
+            val match = n.segments.indexOfFirst { it.text.contains(query, ignoreCase = true) }
+            if (match >= 0) list.scrollToItem(match + 2)
+        }
+    }
+    val centerSpace = with(LocalDensity.current) { (viewportHeight / 2).toDp() }
+    Scaffold(topBar = {
+        TopAppBar(
+            title = { Text("Audio note") },
+            navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") } },
+            actions = {
+                IconButton(onClick = onExport, enabled = n.segments.isNotEmpty()) { Icon(Icons.Outlined.IosShare, "Export") }
+                IconButton(onClick = onDeleteNote, enabled = !n.busy) { Icon(Icons.Outlined.DeleteOutline, "Delete note") }
+            }
+        )
+    }) { padding ->
+        Column(Modifier.fillMaxSize().padding(padding).imePadding()) {
+            AnimatedVisibility(
+                visible = !compact,
+                enter = expandVertically(tween(220)) + fadeIn(tween(180)),
+                exit = shrinkVertically(tween(220)) + fadeOut(tween(140))
+            ) {
+                Column(Modifier.padding(horizontal = 20.dp).padding(top = 12.dp, bottom = 16.dp)) {
+                    BasicTextField(title, { title = it; onTitleChange(it) }, Modifier.fillMaxWidth(),
+                        textStyle = MaterialTheme.typography.headlineMedium.copy(color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold),
+                        decorationBox = { inner -> if (title.isEmpty()) Text("Untitled note", style = MaterialTheme.typography.headlineMedium); inner() })
+                    Spacer(Modifier.height(8.dp))
+                    Text("${DateFormat.getDateInstance().format(Date(n.created))} · ${ModelCatalog.models.firstOrNull { it.id == n.model }?.displayName ?: n.model} · ${n.language.ifBlank { "Auto language" }}",
+                        style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            // Outside the scroll container: play/pause and seeking never scroll off screen.
+            PinnedAudioPlayer(
+                playback = playback, duration = n.duration, compact = compact, following = follow,
+                canFollow = n.segments.isNotEmpty(), onFollow = { setFollowing(it) },
+                onToggle = onTogglePlayback, onSeek = onSeek, onScrub = { follow = false },
+                modifier = Modifier.padding(horizontal = 20.dp).padding(bottom = 8.dp)
+            )
+            LazyColumn(
+                state = list,
+                modifier = Modifier.weight(1f).fillMaxWidth().testTag("transcript-list")
+                    .onSizeChanged { viewportHeight = it.height }
+                    .nestedScroll(manualScroll)
+                    .onPreviewKeyEvent { manualInteraction.value(); false }
+                    .pointerInput(n.id) {
+                        awaitEachGesture {
+                            awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                            manualInteraction.value()
+                            waitForUpOrCancellation(pass = PointerEventPass.Initial)
+                        }
+                    },
+                contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 12.dp, bottom = if (reserveCenterSpace) centerSpace else 20.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                item(key = "transcript-header") {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        if (n.busy) {
+                            Text("${n.status} ${if (n.progress > 0) "${n.progress}%" else "…"}")
+                            LinearProgressIndicator(Modifier.fillMaxWidth())
+                            Text(if (n.checkpointMs > 0) "Text saved through ${timestamp(n.checkpointMs)}. New segments appear below as they finish." else "You can leave this screen. Text appears below as segments finish.", style = MaterialTheme.typography.bodySmall)
+                        }
+                        if (n.resumable) {
+                            Text("Transcription incomplete", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.error)
+                            Text(if (n.checkpointMs > 0) "Saved through ${timestamp(n.checkpointMs)} of ${timestamp(n.duration)}. Resume keeps this text and continues from that timestamp." else "Your audio is saved. Retry to transcribe it.")
+                            n.error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                            Button(onClick = onRetry) { Text(if (n.checkpointMs > 0) "Resume from ${timestamp(n.checkpointMs)}" else "Retry transcription") }
+                        }
+                        if (n.status == "Completed" && n.segments.isEmpty()) Text("No transcript segments. Your audio is still available.")
+                        if (n.segments.isNotEmpty()) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Text("TRANSCRIPT", Modifier.weight(1f), style = MaterialTheme.typography.labelMedium)
+                            if (!follow) FilterChip(false, { setFollowing(true) }, modifier = Modifier.testTag("follow-playback-chip"), label = { Text("Follow playback") })
+                        }
+                    }
+                }
+                item(key = "centering-space") { Spacer(Modifier.height(if (reserveCenterSpace) centerSpace else 0.dp)) }
+                itemsIndexed(n.segments, key = { _, segment -> segment.id }) { _, segment ->
+                    Column(Modifier.fillMaxWidth().testTag("segment-${segment.id}")
+                        .background(if (segment.id == activeId) MaterialTheme.colorScheme.secondaryContainer.copy(alpha = .5f) else MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp))
+                        .padding(12.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            TextButton(onClick = { follow = false; onSeek(segment.start, true) }, contentPadding = PaddingValues(0.dp)) {
+                                Text(timestamp(segment.start), style = MaterialTheme.typography.labelMedium)
+                            }
+                            Spacer(Modifier.weight(1f))
+                            IconButton(onClick = { follow = false; editingId = if (editingId == segment.id) null else segment.id }) {
+                                Icon(Icons.Outlined.Edit, "Edit segment", Modifier.size(18.dp))
+                            }
+                            IconButton(onClick = { follow = false; deletingId = segment.id }) {
+                                Icon(Icons.Outlined.DeleteOutline, "Delete segment", Modifier.size(18.dp))
+                            }
+                        }
+                        if (editingId == segment.id) {
+                            var text by rememberSaveable(n.id, segment.id) { mutableStateOf(segment.text) }
+                            OutlinedTextField(text, { text = it; follow = false; onSegmentChange(segment.id, it) }, Modifier.fillMaxWidth(),
+                                supportingText = { Text("Saved automatically · timestamps preserved") })
+                        } else Text(segment.text, style = MaterialTheme.typography.bodyLarge, lineHeight = 27.sp)
+                    }
+                }
+            }
+        }
+    }
+    n.segments.firstOrNull { it.id == deletingId }?.let { segment ->
+        AlertDialog(
+            onDismissRequest = { deletingId = null }, title = { Text("Delete this segment?") },
+            text = { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("This removes the text at ${timestamp(segment.start)}. The audio and transcription progress are kept.")
+                Text(segment.text, maxLines = 5, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } },
+            confirmButton = { TextButton(onClick = {
+                if (editingId == segment.id) editingId = null
+                onDeleteSegment(segment.id); deletingId = null
+            }) { Text("Delete") } },
+            dismissButton = { TextButton(onClick = { deletingId = null }) { Text("Cancel") } }
+        )
+    }
+}
+
+/** Align against the measured viewport, not estimated row heights or a hard-coded pixel offset. */
+private suspend fun LazyListState.centerSegment(index: Int, segmentId: String) {
+    if (layoutInfo.visibleItemsInfo.none { it.key == segmentId }) scrollToItem(index)
+    val item = snapshotFlow { layoutInfo.visibleItemsInfo.firstOrNull { it.key == segmentId } }.first { it != null }!!
+    val viewportCenter = (layoutInfo.viewportStartOffset + layoutInfo.viewportEndOffset) / 2f
+    val distance = item.offset + item.size / 2f - viewportCenter
+    if (abs(distance) > 1f) animateScrollBy(distance, tween(320))
+}
+
+@Composable
+private fun PinnedAudioPlayer(
+    playback: Playback, duration: Long, compact: Boolean, following: Boolean, canFollow: Boolean,
+    onFollow: (Boolean) -> Unit, onToggle: () -> Unit, onSeek: (Long, Boolean) -> Unit,
+    onScrub: () -> Unit, modifier: Modifier = Modifier
+) {
+    val total = playback.duration.takeIf { it > 0 } ?: duration
+    var scrubPosition by remember { mutableStateOf<Float?>(null) }
+    Card(modifier.fillMaxWidth().testTag("audio-player").animateContentSize(tween(220)), shape = RoundedCornerShape(if (compact) 16.dp else 24.dp)) {
+        Column(Modifier.padding(horizontal = 16.dp, vertical = if (compact) 8.dp else 16.dp)) {
+            if (compact) {
+                Row(Modifier.fillMaxWidth().testTag("compact-player"), verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = { onSeek(playback.position - 10000, false) }, enabled = playback.ready) { Icon(Icons.Outlined.Replay10, "Back 10 seconds") }
+                    FilledIconButton(onClick = onToggle, enabled = playback.ready, modifier = Modifier.size(48.dp)) {
+                        Icon(if (playback.playing) Icons.Outlined.Pause else Icons.Outlined.PlayArrow, if (playback.playing) "Pause" else "Play")
+                    }
+                    IconButton(onClick = { onSeek(playback.position + 10000, false) }, enabled = playback.ready) { Icon(Icons.Outlined.Forward10, "Forward 10 seconds") }
+                    Column(Modifier.weight(1f).padding(start = 8.dp)) {
+                        Text(timestamp(playback.position), style = MaterialTheme.typography.labelMedium)
+                        Text("/ ${timestamp(total)}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    IconToggleButton(checked = following, onCheckedChange = onFollow, enabled = canFollow, modifier = Modifier.testTag("follow-playback-toggle")) {
+                        Icon(Icons.Outlined.MyLocation, if (following) "Stop following playback" else "Follow playback", tint = if (following) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            } else Text("Listen & read", fontWeight = FontWeight.SemiBold)
+            playback.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+            Slider(
+                value = (scrubPosition ?: playback.position.toFloat()).coerceIn(0f, total.coerceAtLeast(1).toFloat()),
+                onValueChange = { onScrub(); scrubPosition = it },
+                onValueChangeFinished = { scrubPosition?.let { onSeek(it.toLong(), false) }; scrubPosition = null },
+                valueRange = 0f..total.coerceAtLeast(1).toFloat(), enabled = playback.ready, modifier = Modifier.fillMaxWidth()
+            )
+            if (!compact) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text(timestamp(playback.position)); Text(timestamp(total)) }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = { onSeek(playback.position - 10000, false) }, enabled = playback.ready) { Icon(Icons.Outlined.Replay10, "Back 10 seconds") }
+                    FilledIconButton(onClick = onToggle, enabled = playback.ready, modifier = Modifier.size(56.dp)) {
+                        Icon(if (playback.playing) Icons.Outlined.Pause else Icons.Outlined.PlayArrow, if (playback.playing) "Pause" else "Play")
+                    }
+                    IconButton(onClick = { onSeek(playback.position + 10000, false) }, enabled = playback.ready) { Icon(Icons.Outlined.Forward10, "Forward 10 seconds") }
+                }
+            }
+        }
+    }
+}
+
+private fun safeName(title: String) = title.replace(Regex("[^\\p{L}\\p{N} ._-]"), "_").take(80).ifBlank { "Transcript" }
