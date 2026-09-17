@@ -83,5 +83,5 @@ class NotesViewModel(app: Application): AndroidViewModel(app) {
     fun title(id: String,value: String) { edits.trySend { repo.update(id) { it.copy(title=value) } } }
     fun segment(id: String,segmentId: String,value: String) { edits.trySend { repo.update(id) { it.editSegment(segmentId,value) } } }
     fun deleteSegment(id: String,segmentId: String) { edits.trySend { repo.update(id) { it.deleteSegment(segmentId) } } }
-    fun delete(n: Note,deleteAudio: Boolean) { application.scope.launch { if(deleteAudio && n.owned) Uri.parse(n.audio).path?.let { File(it).delete() }; repo.delete(n.id) } }
+    fun delete(n: Note,deleteAudio: Boolean) { application.scope.launch { if(deleteAudio && n.owned) Uri.parse(n.audio).path?.let { File(it).delete() }; repo.delete(n.id); PlaybackPositions(application).remove(n.id) } }
 }

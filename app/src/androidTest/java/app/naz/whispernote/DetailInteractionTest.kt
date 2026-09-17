@@ -24,7 +24,7 @@ class DetailInteractionTest {
     private fun show() {
         compose.setContent { WhisperNoteTheme { TranscriptDetailContent(note.value, "", playback.value,
             {}, { id, text -> note.value = note.value.editSegment(id, text) },
-            { id -> note.value = note.value.deleteSegment(id) }, { toggles++ }, { _, _ -> }, {}, {}, {}, {}, list) } }
+            { id -> note.value = note.value.deleteSegment(id) }, { toggles++ }, { _, _ -> }, {}, {}, {}, {}, list, onSpeed={playback.value=playback.value.copy(speed=it)}) } }
     }
     private fun assertCentered(id: String) {
         compose.waitForIdle()
@@ -48,6 +48,16 @@ class DetailInteractionTest {
         var index = 0; var offset = 0
         compose.runOnIdle { index = list.firstVisibleItemIndex; offset = list.firstVisibleItemScrollOffset; playback.value = playback.value.copy(position = 101000) }
         compose.runOnIdle { assertEquals(index, list.firstVisibleItemIndex); assertEquals(offset, list.firstVisibleItemScrollOffset) }
+    }
+    @Test fun speedSelectorWorksInExpandedAndCompactPlayer() {
+        show()
+        compose.onNodeWithTag("playback-speed").performClick()
+        compose.onNodeWithText("1.5×").performClick()
+        compose.runOnIdle {assertEquals(1.5f,playback.value.speed)}
+        compose.onNodeWithTag("transcript-list").performTouchInput {swipeUp()}
+        compose.onNodeWithTag("playback-speed").assertIsDisplayed().performClick()
+        compose.onNodeWithText("0.75×").performClick()
+        compose.runOnIdle {assertEquals(0.75f,playback.value.speed)}
     }
     @Test fun playerCollapsesAndRemainsUsableAfterScrolling() {
         show()

@@ -128,3 +128,11 @@ The version-1 format is ZIP with exactly `note.json` and `audio`. Metadata prese
 Transfers run off the UI thread with a busy indicator. Archives are limited to 16 MiB of metadata and 4 GiB of audio; unknown entries, unsupported versions and invalid timestamps are rejected. Entry paths are never used for extraction, and failed imports remove their copied audio. Shared files are kept in app cache so receiving applications can finish reading them.
 
 Validation: JVM tests, Android lint (no errors), and APK builds passed. Device coverage includes label persistence/rename/deletion, backwards-compatible unlabelled notes, complete-note audio/text round trips, malformed archive cleanup, label picker and drawer filtering, and the existing detail playback/transcript checks.
+
+### Remember listening position
+
+Each note remembers its last audio position on this device. Reopening seeks to that position after the audio prepares and stays paused. Positions are saved on pause, seek and player disposal, plus every five seconds while listening. Normal navigation saves the latest position; an abrupt process termination can lose the last few seconds. Missing or unprepared audio does not overwrite an existing position. Listening progress is stored separately from transcription checkpoints and note modification dates, is not included in shared archives, and is removed when its note is deleted.
+
+### Playback speed
+
+Tap the speed value in the expanded or compact player to choose 0.5×, 0.75×, 1×, 1.25×, 1.5×, or 2×. Playback uses Android MediaPlayer parameters with pitch fixed at 1.0. Changing speed while paused keeps playback paused. Transcript highlighting and following continue to use the audio's media timestamp. Speed defaults to 1× when opening a note.

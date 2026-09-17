@@ -24,6 +24,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.Label
@@ -67,7 +68,12 @@ import kotlin.math.abs
 @Composable
 fun Detail(n: Note, query: String, vm: NotesViewModel, back: () -> Unit) {
     val context = LocalContext.current
-    val player = remember(n.id, n.audio) { n.audio.takeIf { it.isNotEmpty() }?.let { AudioPlayer(context, it) } }
+    val positions = remember(context) { PlaybackPositions(context) }
+    val player = remember(n.id, n.audio) {
+        n.audio.takeIf { it.isNotEmpty() }?.let { audio ->
+            AudioPlayer(context,audio,positions.get(n.id)) { position -> positions.save(n.id,position) }
+        }
+    }
     DisposableEffect(player) { onDispose { player?.release() } }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     DisposableEffect(player, lifecycle) {
@@ -103,7 +109,7 @@ fun Detail(n: Note, query: String, vm: NotesViewModel, back: () -> Unit) {
         onTogglePlayback = { player?.toggle() },
         onSeek = { position, play -> player?.seek(position, play) },
         onRetry = { vm.start(n.id) }, onExport = { export = true },
-        onDeleteNote = { deleting = true }, onBack = back, onLabel = { choosingLabel=true }
+        onDeleteNote = { deleting = true }, onBack = back, onLabel = { choosingLabel=true }, onSpeed = { player?.setSpeed(it) }
     )
     if(choosingLabel) LabelPicker(labels,n.label,{vm.assignLabel(n.id,it)},vm::createLabel,{choosingLabel=false})
     if (deleting) AlertDialog(
@@ -170,7 +176,8 @@ internal fun TranscriptDetailContent(
     onDeleteNote: () -> Unit,
     onBack: () -> Unit,
     list: LazyListState = rememberLazyListState(),
-    onLabel: () -> Unit = {}
+    onLabel: () -> Unit = {},
+    onSpeed: (Float) -> Unit = {}
 ) {
     var title by rememberSaveable(n.id) { mutableStateOf(n.title) }
     var editingId by rememberSaveable(n.id) { mutableStateOf<String?>(null) }
@@ -241,7 +248,7 @@ internal fun TranscriptDetailContent(
             PinnedAudioPlayer(
                 playback = playback, duration = n.duration, compact = compact, following = follow,
                 canFollow = n.segments.isNotEmpty(), onFollow = { setFollowing(it) },
-                onToggle = onTogglePlayback, onSeek = onSeek, onScrub = { follow = false },
+                onToggle = onTogglePlayback, onSeek = onSeek, onSpeed = onSpeed, onScrub = { follow = false },
                 modifier = Modifier.padding(horizontal = 20.dp).padding(bottom = 8.dp)
             )
             LazyColumn(
@@ -301,7 +308,9 @@ internal fun TranscriptDetailContent(
                             var text by rememberSaveable(n.id, segment.id) { mutableStateOf(segment.text) }
                             OutlinedTextField(text, { text = it; follow = false; onSegmentChange(segment.id, it) }, Modifier.fillMaxWidth(),
                                 supportingText = { Text("Saved automatically · timestamps preserved") })
-                        } else Text(segment.text, style = MaterialTheme.typography.bodyLarge, lineHeight = 27.sp)
+                        } else SelectionContainer {
+                            Text(segment.text, style = MaterialTheme.typography.bodyLarge, lineHeight = 27.sp)
+                        }
                     }
                 }
             }
@@ -336,7 +345,7 @@ private suspend fun LazyListState.centerSegment(index: Int, segmentId: String) {
 private fun PinnedAudioPlayer(
     playback: Playback, duration: Long, compact: Boolean, following: Boolean, canFollow: Boolean,
     onFollow: (Boolean) -> Unit, onToggle: () -> Unit, onSeek: (Long, Boolean) -> Unit,
-    onScrub: () -> Unit, modifier: Modifier = Modifier
+    onSpeed: (Float) -> Unit, onScrub: () -> Unit, modifier: Modifier = Modifier
 ) {
     val total = playback.duration.takeIf { it > 0 } ?: duration
     var scrubPosition by remember { mutableStateOf<Float?>(null) }
@@ -357,14 +366,20 @@ private fun PinnedAudioPlayer(
                         Icon(Icons.Outlined.MyLocation, if (following) "Stop following playback" else "Follow playback", tint = if (following) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
-            } else Text("Listen & read", fontWeight = FontWeight.SemiBold)
+            } else Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
+                Text("Listen & read",Modifier.weight(1f),fontWeight=FontWeight.SemiBold)
+                PlaybackSpeedMenu(playback.speed,playback.ready,onSpeed)
+            }
             playback.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+            Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
             Slider(
                 value = (scrubPosition ?: playback.position.toFloat()).coerceIn(0f, total.coerceAtLeast(1).toFloat()),
                 onValueChange = { onScrub(); scrubPosition = it },
                 onValueChangeFinished = { scrubPosition?.let { onSeek(it.toLong(), false) }; scrubPosition = null },
-                valueRange = 0f..total.coerceAtLeast(1).toFloat(), enabled = playback.ready, modifier = Modifier.fillMaxWidth()
+                valueRange = 0f..total.coerceAtLeast(1).toFloat(), enabled = playback.ready, modifier = Modifier.weight(1f)
             )
+            if(compact) PlaybackSpeedMenu(playback.speed,playback.ready,onSpeed)
+            }
             if (!compact) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text(timestamp(playback.position)); Text(timestamp(total)) }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
@@ -380,3 +395,18 @@ private fun PinnedAudioPlayer(
 }
 
 private fun safeName(title: String) = title.replace(Regex("[^\\p{L}\\p{N} ._-]"), "_").take(80).ifBlank { "Transcript" }
+
+@Composable
+private fun PlaybackSpeedMenu(speed: Float, enabled: Boolean, onSpeed: (Float) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    fun label(value: Float) = "${value.toString().removeSuffix(".0")}×"
+    Box {
+        TextButton(onClick={expanded=true},enabled=enabled,modifier=Modifier.testTag("playback-speed")) { Text(label(speed)) }
+        DropdownMenu(expanded,onDismissRequest={expanded=false}) {
+            listOf(0.5f,0.75f,1f,1.25f,1.5f,2f).forEach { value ->
+                DropdownMenuItem(text={Text(label(value))},onClick={onSpeed(value);expanded=false},
+                    trailingIcon={if(value==speed) Icon(Icons.Outlined.Check,"Selected")})
+            }
+        }
+    }
+}
