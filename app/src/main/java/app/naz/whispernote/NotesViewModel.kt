@@ -15,6 +15,26 @@ class NotesViewModel(app: Application): AndroidViewModel(app) {
     private val repo=application.repository
     private val edits=kotlinx.coroutines.channels.Channel<()->Unit>(kotlinx.coroutines.channels.Channel.UNLIMITED)
     init { application.scope.launch { application.ready.await(); for(edit in edits) edit() } }
+    val retryDrafts=application.retries.drafts
+    fun retrySegment(noteId: String, segmentId: String, model: String, language: String) = editSafely {
+        val note=requireNotNull(repo.get(noteId))
+        require(!note.busy) {"Wait for transcription to finish first."}
+        require(application.retries.get(noteId)==null) {"Review or discard the existing suggestion first."}
+        require(models.ready(model)) {"Download the selected model in Models first."}
+        require(language.isBlank() || language.matches(Regex("[a-z]{2,3}"))) {"Enter a language code such as de or en, or leave it blank for automatic detection."}
+        val segment=note.segments.first {it.id==segmentId}
+        require(segment.end>segment.start && note.audio.isNotBlank()) {"This segment has no available audio range."}
+        val draft=SegmentRetry(noteId,segment,model,language)
+        application.retries.put(draft)
+        try {ProcessingService.start(application,noteId,retryId=draft.id)}
+        catch(e: Exception) {application.retries.put(draft.copy(status="Failed",error=e.message))}
+    }
+    fun discardRetry(noteId: String) = editSafely {application.retries.remove(noteId)}
+    fun acceptRetry(noteId: String, split: Boolean) = editSafely {
+        val draft=requireNotNull(application.retries.get(noteId))
+        repo.update(noteId) {it.acceptRetry(draft,split)}
+        application.retries.remove(noteId)
+    }
     val labels=repo.labels
     val transfer=MutableStateFlow<String?>(null)
     val importedNote=MutableStateFlow<String?>(null)
@@ -82,6 +102,6 @@ class NotesViewModel(app: Application): AndroidViewModel(app) {
     fun start(id: String) { try { ProcessingService.start(application,id) } catch(e: Exception) { repo.update(id) { it.copy(status="Failed",error=e.message) } } }
     fun title(id: String,value: String) { edits.trySend { repo.update(id) { it.copy(title=value) } } }
     fun segment(id: String,segmentId: String,value: String) { edits.trySend { repo.update(id) { it.editSegment(segmentId,value) } } }
-    fun deleteSegment(id: String,segmentId: String) { edits.trySend { repo.update(id) { it.deleteSegment(segmentId) } } }
-    fun delete(n: Note,deleteAudio: Boolean) { application.scope.launch { if(deleteAudio && n.owned) Uri.parse(n.audio).path?.let { File(it).delete() }; repo.delete(n.id); PlaybackPositions(application).remove(n.id) } }
+    fun clearSegment(id: String,segmentId: String) { edits.trySend { repo.update(id) { it.clearSegment(segmentId) } } }
+    fun delete(n: Note,deleteAudio: Boolean) { application.scope.launch { if(deleteAudio && n.owned) Uri.parse(n.audio).path?.let { File(it).delete() }; repo.delete(n.id); application.retries.remove(n.id); PlaybackPositions(application).remove(n.id) } }
 }

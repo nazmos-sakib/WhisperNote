@@ -1,0 +1,30 @@
+On-demand ML Kit translation verification — 2026-09-17
+
+Implementation:
+- ML Kit translate 17.0.3; ten language pairs and shared downloadable-pack management.
+- Detail toolbar activation/deactivation; direct per-segment translate button with circular pending indicator.
+- Sequential exact-segment requests; temporary inline results, collapse/expand, error/retry.
+- Rotation retention; navigation cleanup; stale completion rejection after edits or language changes.
+- Official Google Translate attribution assets from:
+  https://docs.cloud.google.com/static/translate/images/google-translate-attribution.zip
+  Source PNGs: color-regular@3x.png and white-regular@3x.png (dark theme).
+
+Build verification:
+JAVA_HOME='/Applications/Android Studio.app/Contents/jbr/Contents/Home' ./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest
+BUILD SUCCESSFUL; 26 JVM tests, zero failures; lint zero errors.
+
+Connected device: A015 (Android).
+Passed device tests across targeted runs:
+- TranslationUiTest: 2 tests (pending ring, inline output/collapse, deactivation, all ten pairs, shared-pack protection, removal confirmation cancellation).
+- TranslationLifecycleTest: 1 test (real German-to-English output, activity recreation, clearing on navigation, original note unchanged).
+- MlKitTranslationTest: 2 tests (actual German model download/delete/re-download and inference; actual German-to-Bengali and German-to-Hindi inference).
+- DetailInteractionTest: 5 tests (playback, follow/centering, scrolling, speed, clear/edit).
+- TranscriptUiTest: 2 tests (incomplete note and progressive segment rendering).
+
+Initial UI runs exposed asynchronous test-window attachment above the device keyguard. Added a bounded readiness wait to the affected fixtures; all affected tests then passed. Production lock-screen behavior is unchanged.
+The model-manager UI test exposed partial bottom-sheet clipping; translation sheets now skip partial expansion. Final translation UI/lifecycle run: OK (3 tests).
+
+Visual inspection: real inline translation and full model-manager screenshots inspected on A015 in dark theme.
+Final debug APK installed with adb install -r, preserving app data.
+German, Bengali and Hindi packs downloaded during real-engine tests remain available on the phone.
+No throughput/RAM benchmark or exhaustive translation-quality assessment was performed.

@@ -136,3 +136,37 @@ Each note remembers its last audio position on this device. Reopening seeks to t
 ### Playback speed
 
 Tap the speed value in the expanded or compact player to choose 0.5×, 0.75×, 1×, 1.25×, 1.5×, or 2×. Playback uses Android MediaPlayer parameters with pitch fixed at 1.0. Changing speed while paused keeps playback paused. Transcript highlighting and following continue to use the audio's media timestamp. Speed defaults to 1× when opening a note.
+
+### Segment playback and detail rendering
+
+Each segment has a play/pause button beside its timestamp. For the current segment it pauses or resumes; for another segment it seeks to that segment and starts playback, continuing through the recording. The fixed player remains available.
+
+Detail rendering observes top-of-list state instead of every scroll pixel. Segment rows are separate composables receiving active/playing flags rather than playback positions. Timestamp lookup uses binary search, header metadata is cached, and inactive delete-dialog lookups avoid scanning the transcript. Viewport-based following waits for the collapse layout to settle; the compact state stays latched during a gesture to avoid toggling when layout changes. These remove identifiable redundant work; no frame-rate benchmark is claimed.
+
+### Clear text and regenerate a segment
+
+**Clear text** replaces the old segment deletion action. It asks for confirmation, empties only the text, and preserves the segment ID, start/end timestamps, audio and transcription checkpoint. Empty segments show **No transcript**, **Add text**, and **Retranscribe**; playback highlighting and following still include them. TXT, Markdown and SRT omit empty segments (SRT numbering stays consecutive), while complete-note archives preserve them. Previously deleted segments are not automatically reconstructed because timestamp gaps can also represent silence.
+
+**Retranscribe** processes the segment's exact saved start/end range. Choose a downloaded model and a language code, or leave the language blank for detection. Preparation streams the audio from its beginning up to the range's end, writing only the selected 16 kHz samples; native inference receives only that cropped PCM. Earlier audio may therefore still incur decoding time, and the model must load. No neighbouring audio is included in this initial version.
+
+The existing foreground service serializes these jobs with full transcriptions and model downloads. Each note can have one outstanding draft. Suggestions are stored locally and survive leaving the screen; interrupted work becomes retryable on restart without touching original text. Review from the segment's Retranscribe action or the retranscription status above the transcript. Cancel/discard leaves source text unchanged.
+
+A ready preview offers **Replace text**, **Use new segments**, and **Keep original**. Replace text merges recognized words into the original segment without changing its ID or timestamps. Use new segments preserves the returned boundaries and inserts empty segments for uncovered parts of the original range. Both retain neighbouring segments and the full-transcription checkpoint. Acceptance refuses to overwrite a segment edited since the request started. Changing models or settings may change recognition; simply repeating the same settings does not guarantee improved accuracy.
+
+Validation: 21 JVM tests, lint with no errors, and debug APK builds passed. All 13 selected device tests passed on A015, including exact PCM range comparison, persisted draft recovery, real six-second Base inference through the foreground service, explicit preview acceptance, clear-text/manual-edit UI, and archive round trips containing empty segments.
+
+Segment actions are grouped under the top-right three-dot menu: Retranscribe, Edit text/Add text (Finish editing while editing), and Clear text. Clear text is disabled for empty segments. The timestamp and play/pause button stay directly accessible.
+
+### On-demand offline translation
+
+Google Translate powers segment translation through ML Kit (`com.google.mlkit:translate:17.0.3`). No API key, Firebase project, billing account, or transcript upload is required. See [ML Kit translation](https://developers.google.com/ml-kit/language/translation) and [Google Cloud Translation](https://cloud.google.com/translate). The app includes Google's attribution badge and translation disclaimer.
+
+Open **Translation models** in the drawer, or **Manage translation models** from the detail toolbar's translation button. Ten pairs are available: German, French, Spanish, Italian, Portuguese, Dutch, Turkish and Ukrainian to English; German to Bengali/Bangla and Hindi. Downloads default to Wi-Fi only, with an explicit option to allow another network. ML Kit manages language packs (roughly 30 MB each); English is built in. Pair readiness reflects all required packs. German is shared by its three pairs. The downloaded-pack list supports removal with a preview of affected pairs; packs used by an active or finishing translator cannot be removed.
+
+In a note, activate a downloaded pair from the toolbar. Tap the translation icon beside a segment's playback/menu controls to translate only that segment's current text. A circular indeterminate progress indicator surrounds the icon while queued or running. Requests execute one at a time; repeated pending taps do not enqueue duplicates. Results expand below the original with a language label and Google Translate attribution; tap the icon again to collapse/reopen. A failed request offers inline retry. No automatic whole-note translation occurs.
+
+Results are held only in the detail session's ViewModel: rotation preserves them, leaving the note clears them, and process death discards them. Nothing is written to notes, exports, or archives. Editing/clearing/replacing source text invalidates its result; changing the target language clears results. Deactivation keeps completed results visible but drops pending requests. An in-flight ML Kit task finishes before its client is closed; late results from edits, old language selections or closed notes are discarded. ML Kit controls internal allocation, so activation prepares a client and first translation may incur model-loading latency; this is not an exact RAM-residency control.
+
+Offline translation quality varies. German-to-Bengali/Hindi uses English as an intermediate language. Models are downloaded on request; opening the app does not download translation packs.
+
+Verification: 26 JVM tests and Android lint (zero errors) passed; debug app and test APKs built. Twelve targeted device tests passed across translation UI/model management, real German→English/Bengali/Hindi inference, rotation/navigation lifetime, and existing transcript/playback interactions. The final debug APK was installed on the connected A015 preserving app data. German, Bengali and Hindi packs are available from the real-engine checks. See `verification/on-demand-translation.txt` for details and the test-window/layout corrections found during verification.

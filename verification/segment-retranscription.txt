@@ -1,0 +1,8 @@
+Segment placeholders and local retranscription
+Device: A015
+Build: testDebugUnitTest, lintDebug, assembleDebug, assembleDebugAndroidTest passed.
+JVM: 21 tests, zero failures.
+Device: DetailInteractionTest (5), SegmentRetryUiTest (1), NoteOrganizationTest (4), SegmentRetryIntegrationTest (3).
+Result: OK (13 tests), 23.803 seconds.
+Native test used the existing Base model, no model downloads, a six-second range (1000–7000 ms) of the bundled JFK test recording.
+Verified source note unchanged before acceptance, suggestion bounds inside selected range, original segment ID/checkpoint retained on Replace text, PCM crop byte equality, durable draft recovery, placeholder manual editing, and full-note archive preservation of blank segments.

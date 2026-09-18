@@ -46,7 +46,10 @@ object Downloader {
 
 /** Streaming decoder and continuous linear resampler. PCM is spooled to disk, not a huge JVM array. */
 class AudioDecoder(private val context: Context) {
-    suspend fun decode(uri: Uri, output: File): Long {
+    suspend fun decode(uri: Uri, output: File, startMs: Long = 0, endMs: Long = Long.MAX_VALUE): Long {
+        require(startMs>=0 && endMs>startMs)
+        val firstSample=startMs*16
+        val lastSample=if(endMs==Long.MAX_VALUE) Long.MAX_VALUE else endMs*16
         val extractor=MediaExtractor(); var codec: MediaCodec?=null
         try {
             extractor.setDataSource(context,uri,null)
@@ -66,7 +69,7 @@ class AudioDecoder(private val context: Context) {
                         val fraction=(next-(index-1)).coerceIn(0.0,1.0)
                         val value=(previous+(v-previous)*fraction).toFloat().coerceIn(-1f,1f)
                         val bits=java.lang.Float.floatToIntBits(value)
-                        out.write(bits and 255); out.write(bits ushr 8 and 255); out.write(bits ushr 16 and 255); out.write(bits ushr 24 and 255)
+                        if(written>=firstSample && written<lastSample) { out.write(bits and 255); out.write(bits ushr 8 and 255); out.write(bits ushr 16 and 255); out.write(bits ushr 24 and 255) }
                         written++; next+=rate/16000.0
                     }
                     previous=v; index++
@@ -90,18 +93,18 @@ class AudioDecoder(private val context: Context) {
                         val b=decoder.getOutputBuffer(i)!!.order(ByteOrder.LITTLE_ENDIAN)
                         b.position(info.offset); b.limit(info.offset+info.size)
                         val bytes=if(encoding==AudioFormat.ENCODING_PCM_FLOAT) 4 else 2
-                        while(b.remaining()>=channels*bytes) {
+                        while(b.remaining()>=channels*bytes && written<lastSample) {
                             var mono=0f
                             repeat(channels) { mono+=if(bytes==4) b.float else b.short/32768f }
                             sample(mono/channels)
                         }
-                        outputDone=info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
+                        outputDone=written>=lastSample || info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
                         decoder.releaseOutputBuffer(i,false)
                     }
                 }
             }
-            require(written>0) { "The audio is empty." }
-            return written*1000/16000
+            require(written>firstSample && (lastSample==Long.MAX_VALUE || written>=lastSample)) { "The audio does not contain the selected time range." }
+            return (minOf(written,lastSample)-firstSample)*1000/16000
         } finally { codec?.release(); extractor.release() }
     }
 }

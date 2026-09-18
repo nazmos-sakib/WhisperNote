@@ -13,7 +13,7 @@ import kotlinx.coroutines.channels.Channel
 import java.io.File
 
 class ProcessingService : Service() {
-    private data class Work(val id: String, val modelOnly: Boolean)
+    private data class Work(val id: String, val modelOnly: Boolean, val retryId: String? = null)
     // Queue ownership and service shutdown run on Main so a new start cannot race stopSelf.
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val queue = Channel<Work>(Channel.UNLIMITED)
@@ -41,11 +41,12 @@ class ProcessingService : Service() {
                         if (work.modelOnly) ModelManager(this@ProcessingService).download(work.id) {
                             ModelDownloads.progress.value = work.id to it
                             notifyProgress("${if (it == 100) "Verifying" else "Downloading"} ${ModelCatalog.get(work.id).displayName}", it, null)
-                        } else process(work.id)
+                        } else if(work.retryId!=null) retrySegment(work.id,work.retryId) else process(work.id)
                     }
                 } catch (e: Exception) {
                     withContext(NonCancellable + Dispatchers.IO) {
                         if (work.modelOnly) ModelDownloads.error.value = e.message ?: "Download failed"
+                        else if(work.retryId!=null) app.retries.update(work.id,work.retryId) {it.copy(status="Failed",error=e.message ?: "Retranscription stopped. Original text is unchanged.")}
                         else repo.update(work.id) { note ->
                             if (note.status == "Completed") note
                             else note.copy(
@@ -70,7 +71,7 @@ class ProcessingService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val id = intent?.getStringExtra("id") ?: return START_NOT_STICKY
         latestStartId = startId
-        val work = Work(id, intent.getBooleanExtra("modelOnly", false))
+        val work = Work(id, intent.getBooleanExtra("modelOnly", false),intent.getStringExtra("retryId"))
         val type = if (Build.VERSION.SDK_INT >= 35)
             ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING or ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
         else if (Build.VERSION.SDK_INT >= 29) ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0
@@ -145,6 +146,41 @@ class ProcessingService : Service() {
         } finally { pcm.delete() }
     }
 
+    private suspend fun retrySegment(noteId: String, retryId: String) {
+        val draft=app.retries.get(noteId)?.takeIf {it.id==retryId && it.busy} ?: return
+        val note=repo.get(noteId) ?: error("Note no longer exists.")
+        require(!note.busy) {"Wait for the full transcription to finish before retrying a segment."}
+        require(note.segments.any {it==draft.original}) {"The segment changed. Generate a new suggestion."}
+        val models=ModelManager(this)
+        require(models.ready(draft.model)) {"Download the selected model from Models first."}
+        val pcm=File(cacheDir,"retry-$retryId.pcm")
+        val job=currentCoroutineContext().job
+        fun update(status: String, progress: Int=0) {
+            job.ensureActive()
+            check(app.retries.get(noteId)?.let {it.id==retryId && it.busy}==true) {"Retranscription cancelled."}
+            app.retries.update(noteId,retryId) {it.copy(status=status,progress=progress)}
+            notifyProgress("$status · ${note.title}",progress,noteId)
+        }
+        try {
+            update("Preparing audio")
+            AudioDecoder(this).decode(Uri.parse(note.audio),pcm,draft.original.start,draft.original.end)
+            update("Loading model")
+            val result=mutableListOf<Segment>()
+            WhisperEngine().transcribe(models.file(draft.model).path,pcm.path,0,draft.language,object: WhisperEngine.Listener {
+                override fun onProgress(progress: Int) {update("Transcribing",progress)}
+                override fun onSegment(start: Long,end: Long,text: String) {
+                    job.ensureActive()
+                    val from=(draft.original.start+start).coerceAtLeast(draft.original.start)
+                    val to=(draft.original.start+end).coerceAtMost(draft.original.end)
+                    if(to>from) result.add(Segment(from,to,text.trim()))
+                }
+                override fun isCancelled() = !job.isActive || app.retries.get(noteId)?.let {it.id!=retryId || !it.busy}!=false
+            })
+            job.ensureActive()
+            app.retries.update(noteId,retryId) {it.copy(status="Ready",progress=100,result=result.toList())}
+        } finally {pcm.delete()}
+    }
+
     override fun onTimeout(startId: Int, fgsType: Int) {
         scope.cancel("Android stopped this long-running job")
         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -152,13 +188,15 @@ class ProcessingService : Service() {
     }
 
     override fun onDestroy() {
-        val outstanding = pending.filterNot { it.modelOnly }.map { it.id }
+        val retryWork=pending.filter {it.retryId!=null}.toList()
+        val outstanding = pending.filter { !it.modelOnly && it.retryId==null }.map { it.id }
         scope.cancel()
         // A normal service shutdown also preserves queued jobs as retryable. Abrupt process death is
         // recovered by WhisperApp on the next launch, before new work may start.
         app.scope.launch {
             worker?.join()
             app.ready.await()
+            retryWork.forEach { work -> app.retries.update(work.id,work.retryId!!) {if(it.busy) it.copy(status="Failed",error="Processing stopped. Your original text is unchanged.") else it} }
             outstanding.forEach { id -> repo.update(id) { if (it.busy) it.interrupted("Processing stopped. Resume to continue from the saved text.") else it } }
         }
         wakeLock?.let { if (it.isHeld) it.release() }
@@ -166,9 +204,9 @@ class ProcessingService : Service() {
     }
 
     companion object {
-        fun start(context: Context, id: String, modelOnly: Boolean = false) {
+        fun start(context: Context, id: String, modelOnly: Boolean = false, retryId: String? = null) {
             androidx.core.content.ContextCompat.startForegroundService(context,
-                Intent(context, ProcessingService::class.java).putExtra("id", id).putExtra("modelOnly", modelOnly))
+                Intent(context, ProcessingService::class.java).putExtra("id", id).putExtra("modelOnly", modelOnly).putExtra("retryId",retryId))
         }
     }
 }

@@ -3,6 +3,7 @@ package app.naz.whispernote
 import android.content.Intent
 import android.os.Bundle
 import android.net.Uri
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -48,16 +49,28 @@ class MainActivity: ComponentActivity() {
         }?.takeIf { it.scheme=="content" }
     }
     override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState); receive(intent); enableEdgeToEdge()
+        super.onCreate(savedInstanceState); receive(intent);
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) //keep the screen always on
+        enableEdgeToEdge()
         setContent { WhisperNoteTheme {
             val id by opened.collectAsState(); val uri by incoming.collectAsState()
             WhisperNote(id,incoming=uri,consumeIncoming={incoming.value=null;setIntent(Intent(this,MainActivity::class.java))})
         } }
     }
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); receive(intent) }
+    override fun onResume() {
+        super.onResume()
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    }
+    override fun onPause() {
+        super.onPause()
+        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    }
 }
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable fun WhisperNote(opened: String?,vm: NotesViewModel=viewModel(), incoming: Uri? = null, consumeIncoming: () -> Unit = {}) {
+    val translationVm: TranslationViewModel = viewModel()
+    var translationModels by remember { mutableStateOf(false) }
     val notes by vm.notes.collectAsStateWithLifecycle()
     val error by vm.error.collectAsStateWithLifecycle()
     val labels by vm.labels.collectAsStateWithLifecycle()
@@ -83,7 +96,7 @@ class MainActivity: ComponentActivity() {
     LaunchedEffect(imported) { imported?.let { selected=it; vm.importedNote.value=null } }
     val note=notes.firstOrNull { it.id==selected }
     androidx.activity.compose.BackHandler(selected!=null) { selected=null }
-    if(note!=null) { Detail(note,query,vm) { selected=null } }
+    if(note!=null) { Detail(note,query,vm,translationVm) { selected=null } }
     else ModalNavigationDrawer(drawerState=drawer,drawerContent={
         ModalDrawerSheet {
             Column(Modifier.verticalScroll(rememberScrollState()).padding(12.dp)) {
@@ -105,6 +118,7 @@ class MainActivity: ComponentActivity() {
                 }
                 NavigationDrawerItem(label={Text("Create label")},selected=false,onClick={createLabel=true},icon={Icon(Icons.Outlined.Add,null)})
                 HorizontalDivider(Modifier.padding(vertical=12.dp))
+                NavigationDrawerItem(label={Text("Translation models")},selected=false,onClick={scope.launch {drawer.close();translationModels=true}},icon={Icon(Icons.Outlined.Translate,null)})
                 NavigationDrawerItem(label={Text("Models")},selected=false,onClick={scope.launch {drawer.close();modelSheet=true}},icon={Icon(Icons.Outlined.Memory,null)})
                 NavigationDrawerItem(label={Text("Import complete note")},selected=false,onClick={if(transfer==null) {scope.launch {drawer.close()};archivePicker.launch(arrayOf("*/*"))}},icon={Icon(Icons.Outlined.FileOpen,null)})
             }
@@ -145,6 +159,7 @@ class MainActivity: ComponentActivity() {
     renameLabel?.let { old -> LabelNameDialog(old,{vm.renameLabel(old,it); if(labelFilter==old) labelFilter=it;renameLabel=null},{renameLabel=null}) }
     deleteLabel?.let { label -> AlertDialog(onDismissRequest={deleteLabel=null},title={Text("Delete label?")},text={Text("Notes in “$label” will become unlabelled. No notes or audio will be deleted.")},confirmButton={TextButton(onClick={vm.deleteLabel(label);deleteLabel=null}) {Text("Delete label")}},dismissButton={TextButton(onClick={deleteLabel=null}) {Text("Cancel")}}) }
     if(transfer!=null) AlertDialog(onDismissRequest={},title={Text(transfer!!)},text={Column {LinearProgressIndicator(Modifier.fillMaxWidth());Text("Large audio files can take a little while.")}},confirmButton={})
+    if(translationModels) TranslationModelsSheet(translationVm) { translationModels=false }
     if(modelSheet) ModalBottomSheet(onDismissRequest={modelSheet=false}) { Models(vm) }
     if(error!=null) AlertDialog(onDismissRequest={vm.error.value=null},title={Text("Something went wrong")},text={Text(error!!)},confirmButton={TextButton(onClick={vm.error.value=null}) {Text("OK")}})
 }

@@ -35,7 +35,7 @@ class NoteOrganizationTest {
         try {
             val original=Note(title="German lesson",audio=Uri.fromFile(audio).toString(),duration=11000,created=1234,modified=5678,
                 language="de",model="base-q5_1",status="Completed",checkpointMs=11000,label="Season 1",
-                segments=listOf(Segment(120,2500,"Corrected words"),Segment(3100,10000,"Second sentence")))
+                segments=listOf(Segment(120,2500,"Corrected words"),Segment(2500,3100,""),Segment(3100,10000,"Second sentence")))
             val bytes=ByteArrayOutputStream().also {NoteArchive.write(context,original,it)}.toByteArray()
             imported=NoteArchive.read(context,ByteArrayInputStream(bytes))
             assertNotEquals(original.id,imported.id)

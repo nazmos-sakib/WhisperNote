@@ -21,13 +21,22 @@ class DetailInteractionTest {
     private val playback = mutableStateOf(Playback(ready = true, playing = true, position = 1000, duration = 300000))
     private val list = LazyListState()
     private var toggles = 0
+    private var sought: Long? = null
     private fun show() {
         compose.setContent { WhisperNoteTheme { TranscriptDetailContent(note.value, "", playback.value,
             {}, { id, text -> note.value = note.value.editSegment(id, text) },
-            { id -> note.value = note.value.deleteSegment(id) }, { toggles++ }, { _, _ -> }, {}, {}, {}, {}, list, onSpeed={playback.value=playback.value.copy(speed=it)}) } }
+            { id -> note.value = note.value.clearSegment(id) }, { toggles++;playback.value=playback.value.copy(playing=!playback.value.playing) }, { position, play -> sought=position;playback.value=playback.value.copy(position=position,playing=play) }, {}, {}, {}, {}, list, onSpeed={playback.value=playback.value.copy(speed=it)}) } }
+        // Showing the test window above the keyguard is asynchronous on some devices.
+        compose.waitUntil(10000) {
+            runCatching { compose.onAllNodesWithTag("transcript-list").fetchSemanticsNodes().isNotEmpty() }.getOrDefault(false)
+        }
     }
     private fun assertCentered(id: String) {
-        compose.waitForIdle()
+        compose.waitUntil(5000) {
+            val info=list.layoutInfo
+            val item=info.visibleItemsInfo.firstOrNull {it.key==id}
+            item!=null && kotlin.math.abs((info.viewportStartOffset+info.viewportEndOffset)/2f-item.offset-item.size/2f)<4f
+        }
         compose.runOnIdle {
             val info = list.layoutInfo
             val item = info.visibleItemsInfo.first { it.key == id }
@@ -49,6 +58,17 @@ class DetailInteractionTest {
         compose.runOnIdle { index = list.firstVisibleItemIndex; offset = list.firstVisibleItemScrollOffset; playback.value = playback.value.copy(position = 101000) }
         compose.runOnIdle { assertEquals(index, list.firstVisibleItemIndex); assertEquals(offset, list.firstVisibleItemScrollOffset) }
     }
+    @Test fun segmentButtonPausesCurrentAndStartsAnotherSegment() {
+        show()
+        compose.onNodeWithTag("transcript-list").performScrollToNode(hasTestTag("segment-s0"))
+        compose.onNodeWithTag("segment-play-s0").performClick()
+        compose.runOnIdle {assertEquals(1,toggles);assertFalse(playback.value.playing)}
+        compose.onNodeWithTag("segment-play-s0").performClick()
+        compose.runOnIdle {assertTrue(playback.value.playing)}
+        compose.onNodeWithTag("transcript-list").performScrollToNode(hasTestTag("segment-s5"))
+        compose.onNodeWithTag("segment-play-s5").performClick()
+        compose.runOnIdle {assertEquals(50000L,sought);assertTrue(playback.value.playing)}
+    }
     @Test fun speedSelectorWorksInExpandedAndCompactPlayer() {
         show()
         compose.onNodeWithTag("playback-speed").performClick()
@@ -68,14 +88,22 @@ class DetailInteractionTest {
         compose.runOnIdle { assertEquals(1, toggles) }
         assertTrue(compose.onNodeWithTag("audio-player").fetchSemanticsNode().boundsInRoot.height < expanded)
     }
-    @Test fun segmentDeletionRequiresConfirmationAndPreservesProgress() {
+    @Test fun clearingTextRequiresConfirmationAndPreservesProgress() {
         show()
         compose.onNodeWithTag("transcript-list").performScrollToNode(hasTestTag("segment-s0"))
-        compose.onAllNodesWithContentDescription("Delete segment")[0].performClick()
+        compose.onNodeWithTag("segment-menu-s0").performClick()
+        compose.onNodeWithText("Clear text").performClick()
         compose.onNodeWithText("Cancel").performClick()
         compose.runOnIdle { assertEquals(30, note.value.segments.size) }
-        compose.onAllNodesWithContentDescription("Delete segment")[0].performClick()
-        compose.onNodeWithText("Delete", substring = false).performClick()
-        compose.runOnIdle { assertEquals(29, note.value.segments.size); assertEquals("s1", note.value.segments.first().id); assertEquals(300000L, note.value.checkpointMs) }
+        compose.onNodeWithTag("segment-menu-s0").performClick()
+        compose.onNodeWithText("Clear text").performClick()
+        compose.onNodeWithText("Clear text", substring = false).performClick()
+        compose.runOnIdle { assertEquals(30, note.value.segments.size); assertEquals("s0", note.value.segments.first().id); assertEquals("",note.value.segments.first().text); assertEquals(300000L, note.value.checkpointMs) }
+        compose.onNodeWithText("No transcript").assertIsDisplayed()
+        compose.onNodeWithTag("segment-menu-s0").performClick()
+        compose.onNodeWithText("Clear text").assertIsNotEnabled()
+        compose.onNodeWithText("Add text").performClick()
+        compose.onAllNodes(hasSetTextAction()).filter(hasAnyAncestor(hasTestTag("segment-s0")))[0].performTextInput("My own words")
+        compose.runOnIdle {assertEquals("My own words",note.value.segments.first().text);assertEquals(10000L,note.value.segments.first().end)}
     }
 }

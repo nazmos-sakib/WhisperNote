@@ -32,7 +32,7 @@ data class Note(
         segments = segments.map { if (it.id == segmentId) it.copy(text = text) else it }
     )
     // The checkpoint records processed audio, not the last remaining visible segment.
-    fun deleteSegment(segmentId: String) = copy(segments = segments.filterNot { it.id == segmentId })
+    fun clearSegment(segmentId: String) = editSegment(segmentId, "")
     fun interrupted(reason: String) = copy(status = "Interrupted", error = reason)
 }
 
@@ -113,8 +113,8 @@ fun timestamp(ms: Long, srt: Boolean = false): String {
 }
 object Exporter {
     fun render(n: Note, format: String): String = when(format) {
-        "srt" -> n.segments.mapIndexed { i,s -> "${i+1}\n${timestamp(s.start,true)} --> ${timestamp(s.end,true)}\n${s.text.trim()}\n" }.joinToString("\n")
-        "md" -> "# ${n.title}\n\n" + n.segments.joinToString("\n\n") { "**${timestamp(it.start)}**\n\n${it.text}" }
-        else -> n.title + "\n\n" + n.segments.joinToString("\n\n") { "${timestamp(it.start)}\n${it.text}" }
+        "srt" -> n.segments.filter { it.text.isNotBlank() }.mapIndexed { i,s -> "${i+1}\n${timestamp(s.start,true)} --> ${timestamp(s.end,true)}\n${s.text.trim()}\n" }.joinToString("\n")
+        "md" -> "# ${n.title}\n\n" + n.segments.filter { it.text.isNotBlank() }.joinToString("\n\n") { "**${timestamp(it.start)}**\n\n${it.text}" }
+        else -> n.title + "\n\n" + n.segments.filter { it.text.isNotBlank() }.joinToString("\n\n") { "${timestamp(it.start)}\n${it.text}" }
     }
 }

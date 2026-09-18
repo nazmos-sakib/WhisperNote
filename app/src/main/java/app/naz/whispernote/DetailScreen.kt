@@ -57,6 +57,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.naz.whispernote.core.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -66,8 +68,32 @@ import kotlin.math.abs
 
 /** Owns playback and persistence; the content below is also usable with deterministic playback in tests. */
 @Composable
-fun Detail(n: Note, query: String, vm: NotesViewModel, back: () -> Unit) {
+fun Detail(n: Note, query: String, vm: NotesViewModel, translationVm: TranslationViewModel = androidx.lifecycle.viewmodel.compose.viewModel(), back: () -> Unit) {
     val context = LocalContext.current
+    val translationSession = translationVm.session
+    val translations by translationSession.state.collectAsStateWithLifecycle()
+    var translatorSheet by rememberSaveable(n.id) { mutableStateOf(false) }
+    var translationModels by rememberSaveable(n.id) { mutableStateOf(false) }
+    var pendingTranslationId by rememberSaveable(n.id) { mutableStateOf<String?>(null) }
+    DisposableEffect(n.id, translationSession) {
+        translationSession.enter(n.id)
+        onDispose {
+            // The activity ViewModel retains temporary results through rotation, never through navigation.
+            var owner = context
+            while (owner is android.content.ContextWrapper && owner !is android.app.Activity) owner = owner.baseContext
+            if ((owner as? android.app.Activity)?.isChangingConfigurations != true) translationSession.leave()
+        }
+    }
+    LaunchedEffect(n.segments) { translationSession.reconcile(n.segments) }
+    if (translatorSheet && !translationModels) ActiveTranslatorSheet(translationVm,
+        onManage = { translationModels = true },
+        onDismiss = { translatorSheet = false; pendingTranslationId = null },
+        onActivated = {
+            translatorSheet = false
+            n.segments.firstOrNull { it.id == pendingTranslationId }?.let { translationSession.request(it.id, it.text) }
+            pendingTranslationId = null
+        })
+    if (translationModels) TranslationModelsSheet(translationVm) { translationModels = false }
     val positions = remember(context) { PlaybackPositions(context) }
     val player = remember(n.id, n.audio) {
         n.audio.takeIf { it.isNotEmpty() }?.let { audio ->
@@ -88,6 +114,9 @@ fun Detail(n: Note, query: String, vm: NotesViewModel, back: () -> Unit) {
     val scope = rememberCoroutineScope()
     var deleting by remember { mutableStateOf(false) }
     var deleteAudio by remember { mutableStateOf(true) }
+    val drafts by vm.retryDrafts.collectAsStateWithLifecycle()
+    val draft=drafts[n.id]
+    var retrySegmentId by rememberSaveable(n.id) { mutableStateOf<String?>(null) }
     val labels by vm.labels.collectAsStateWithLifecycle()
     var choosingLabel by remember { mutableStateOf(false) }
     val archiveSave=rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(NoteArchive.MIME)) { uri -> uri?.let {vm.exportArchive(n,it)} }
@@ -104,13 +133,27 @@ fun Detail(n: Note, query: String, vm: NotesViewModel, back: () -> Unit) {
     TranscriptDetailContent(
         n = n, query = query, playback = playback,
         onTitleChange = { vm.title(n.id, it) },
-        onSegmentChange = { id, text -> vm.segment(n.id, id, text) },
-        onDeleteSegment = { vm.deleteSegment(n.id, it) },
+        onSegmentChange = { id, text -> translationSession.invalidate(id); vm.segment(n.id, id, text) },
+        onClearSegment = { translationSession.invalidate(it); vm.clearSegment(n.id, it) },
         onTogglePlayback = { player?.toggle() },
         onSeek = { position, play -> player?.seek(position, play) },
         onRetry = { vm.start(n.id) }, onExport = { export = true },
-        onDeleteNote = { deleting = true }, onBack = back, onLabel = { choosingLabel=true }, onSpeed = { player?.setSpeed(it) }
+        onDeleteNote = { deleting = true }, onBack = back, onLabel = { choosingLabel=true }, onSpeed = { player?.setSpeed(it) },
+        onRetranscribe={retrySegmentId=it}, retryStatus=draft?.status,
+        onReviewRetry={retrySegmentId=draft?.original?.id},
+        translations = translations,
+        onTranslator = { pendingTranslationId = null; translatorSheet = true },
+        onTranslate = { segment ->
+            val result = translations.results[segment.id]
+            if (result?.text != null && result.source == segment.text) translationSession.toggle(segment.id)
+            else if (translations.active == null) { pendingTranslationId = segment.id; translatorSheet = true }
+            else translationSession.request(segment.id, segment.text)
+        }
     )
+    if(retrySegmentId!=null) {
+        val target=n.segments.firstOrNull {it.id==retrySegmentId}
+        if(draft!=null || target!=null) SegmentRetryDialog(n,target,draft,vm,{retrySegmentId=null})
+    }
     if(choosingLabel) LabelPicker(labels,n.label,{vm.assignLabel(n.id,it)},vm::createLabel,{choosingLabel=false})
     if (deleting) AlertDialog(
         onDismissRequest = { deleting = false }, title = { Text("Delete this note?") },
@@ -168,7 +211,7 @@ internal fun TranscriptDetailContent(
     playback: Playback,
     onTitleChange: (String) -> Unit,
     onSegmentChange: (String, String) -> Unit,
-    onDeleteSegment: (String) -> Unit,
+    onClearSegment: (String) -> Unit,
     onTogglePlayback: () -> Unit,
     onSeek: (Long, Boolean) -> Unit,
     onRetry: () -> Unit,
@@ -177,7 +220,13 @@ internal fun TranscriptDetailContent(
     onBack: () -> Unit,
     list: LazyListState = rememberLazyListState(),
     onLabel: () -> Unit = {},
-    onSpeed: (Float) -> Unit = {}
+    onSpeed: (Float) -> Unit = {},
+    onRetranscribe: (String) -> Unit = {},
+    retryStatus: String? = null,
+    onReviewRetry: () -> Unit = {},
+    translations: TranslationSessionState = TranslationSessionState(),
+    onTranslator: () -> Unit = {},
+    onTranslate: (Segment) -> Unit = {}
 ) {
     var title by rememberSaveable(n.id) { mutableStateOf(n.title) }
     var editingId by rememberSaveable(n.id) { mutableStateOf<String?>(null) }
@@ -185,9 +234,22 @@ internal fun TranscriptDetailContent(
     var follow by rememberSaveable(n.id) { mutableStateOf(false) }
     // Keep centering space after a manual interruption to avoid a sudden layout jump under the finger.
     var reserveCenterSpace by rememberSaveable(n.id) { mutableStateOf(false) }
+    var measuredViewportHeight by remember { mutableIntStateOf(0) }
     var viewportHeight by remember { mutableIntStateOf(0) }
-    val compact by remember { derivedStateOf { follow || editingId != null || list.canScrollBackward } }
-    val activeIndex = n.segments.indexOfFirst { playback.position >= it.start && playback.position < it.end }
+    // Let the header animation settle before changing centering padding or restarting following.
+    LaunchedEffect(list) {
+        snapshotFlow { measuredViewportHeight }.collectLatest { height ->
+            if(viewportHeight!=0) delay(150)
+            viewportHeight=height
+        }
+    }
+    var scrollCollapsed by remember { mutableStateOf(false) }
+    LaunchedEffect(list) {
+        snapshotFlow { if(list.canScrollBackward) 1 else if(!list.isScrollInProgress) 0 else -1 }
+            .collect { state -> if(state>=0) scrollCollapsed=state==1 }
+    }
+    val compact = follow || editingId != null || scrollCollapsed
+    val activeIndex = segmentAtPosition(n.segments,playback.position)
     val activeId = n.segments.getOrNull(activeIndex)?.id
     val manualInteraction = rememberUpdatedState { follow = false }
     val manualScroll = remember {
@@ -207,8 +269,9 @@ internal fun TranscriptDetailContent(
     LaunchedEffect(follow, activeId, viewportHeight, n.segments.size) {
         if (follow && activeId != null && viewportHeight > 0) list.centerSegment(activeIndex + 2, activeId)
     }
-    LaunchedEffect(follow, list.firstVisibleItemIndex, list.firstVisibleItemScrollOffset) {
-        if (!follow && list.firstVisibleItemIndex == 0 && list.firstVisibleItemScrollOffset == 0) reserveCenterSpace = false
+    LaunchedEffect(follow,list) {
+        snapshotFlow { list.firstVisibleItemIndex == 0 && list.firstVisibleItemScrollOffset == 0 }
+            .collect { atTop -> if(!follow && atTop) reserveCenterSpace=false }
     }
     LaunchedEffect(n.id, query) {
         if (query.isNotBlank()) {
@@ -216,12 +279,19 @@ internal fun TranscriptDetailContent(
             if (match >= 0) list.scrollToItem(match + 2)
         }
     }
+    val metadata=remember(n.created,n.model,n.language) {
+        "${DateFormat.getDateInstance().format(Date(n.created))} · ${ModelCatalog.models.firstOrNull { it.id == n.model }?.displayName ?: n.model} · ${n.language.ifBlank { "Auto language" }}"
+    }
     val centerSpace = with(LocalDensity.current) { (viewportHeight / 2).toDp() }
     Scaffold(topBar = {
         TopAppBar(
             title = { Text("Audio note") },
             navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") } },
             actions = {
+                IconButton(onClick=onTranslator, modifier=Modifier.testTag("translation-toolbar")) {
+                    Icon(Icons.Outlined.Translate, translations.active?.let { "Translator active: ${it.label}" } ?: "Choose translator",
+                        tint=if(translations.active!=null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                }
                 IconButton(onClick=onLabel) {Icon(Icons.AutoMirrored.Outlined.Label,"Change label")}
                 IconButton(onClick = onExport, enabled = n.segments.isNotEmpty() || n.audio.isNotBlank()) { Icon(Icons.Outlined.IosShare, "Export") }
                 IconButton(onClick = onDeleteNote, enabled = !n.busy) { Icon(Icons.Outlined.DeleteOutline, "Delete note") }
@@ -240,7 +310,7 @@ internal fun TranscriptDetailContent(
                         decorationBox = { inner -> if (title.isEmpty()) Text("Untitled note", style = MaterialTheme.typography.headlineMedium); inner() })
                     TextButton(onClick=onLabel) {Text(n.label ?: "Add label")}
                     Spacer(Modifier.height(8.dp))
-                    Text("${DateFormat.getDateInstance().format(Date(n.created))} · ${ModelCatalog.models.firstOrNull { it.id == n.model }?.displayName ?: n.model} · ${n.language.ifBlank { "Auto language" }}",
+                    Text(metadata,
                         style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
@@ -254,7 +324,7 @@ internal fun TranscriptDetailContent(
             LazyColumn(
                 state = list,
                 modifier = Modifier.weight(1f).fillMaxWidth().testTag("transcript-list")
-                    .onSizeChanged { viewportHeight = it.height }
+                    .onSizeChanged { measuredViewportHeight = it.height }
                     .nestedScroll(manualScroll)
                     .onPreviewKeyEvent { manualInteraction.value(); false }
                     .pointerInput(n.id) {
@@ -269,6 +339,7 @@ internal fun TranscriptDetailContent(
             ) {
                 item(key = "transcript-header") {
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        if(retryStatus!=null) TextButton(onClick={editingId=null;onReviewRetry()}) {Text("Retranscription · $retryStatus · View")}
                         if (n.busy) {
                             Text("${n.status} ${if (n.progress > 0) "${n.progress}%" else "…"}")
                             LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -289,44 +360,37 @@ internal fun TranscriptDetailContent(
                 }
                 item(key = "centering-space") { Spacer(Modifier.height(if (reserveCenterSpace) centerSpace else 0.dp)) }
                 itemsIndexed(n.segments, key = { _, segment -> segment.id }) { _, segment ->
-                    Column(Modifier.fillMaxWidth().testTag("segment-${segment.id}")
-                        .background(if (segment.id == activeId) MaterialTheme.colorScheme.secondaryContainer.copy(alpha = .5f) else MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp))
-                        .padding(12.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            TextButton(onClick = { follow = false; onSeek(segment.start, true) }, contentPadding = PaddingValues(0.dp)) {
-                                Text(timestamp(segment.start), style = MaterialTheme.typography.labelMedium)
-                            }
-                            Spacer(Modifier.weight(1f))
-                            IconButton(onClick = { follow = false; editingId = if (editingId == segment.id) null else segment.id }) {
-                                Icon(Icons.Outlined.Edit, "Edit segment", Modifier.size(18.dp))
-                            }
-                            IconButton(onClick = { follow = false; deletingId = segment.id }) {
-                                Icon(Icons.Outlined.DeleteOutline, "Delete segment", Modifier.size(18.dp))
-                            }
-                        }
-                        if (editingId == segment.id) {
-                            var text by rememberSaveable(n.id, segment.id) { mutableStateOf(segment.text) }
-                            OutlinedTextField(text, { text = it; follow = false; onSegmentChange(segment.id, it) }, Modifier.fillMaxWidth(),
-                                supportingText = { Text("Saved automatically · timestamps preserved") })
-                        } else SelectionContainer {
-                            Text(segment.text, style = MaterialTheme.typography.bodyLarge, lineHeight = 27.sp)
-                        }
-                    }
+                    TranscriptSegmentRow(
+                        segment=segment, active=segment.id==activeId,
+                        playing=segment.id==activeId && playback.playing, ready=playback.ready,
+                        editing=editingId==segment.id,
+                        onTimestamp={follow=false;onSeek(segment.start,true)},
+                        onPlayback={
+                            follow=false
+                            if(segment.id==activeId) onTogglePlayback() else onSeek(segment.start,true)
+                        },
+                        onEdit={follow=false;editingId=if(editingId==segment.id) null else segment.id},
+                        onDelete={follow=false;deletingId=segment.id},
+                        onText={follow=false;onSegmentChange(segment.id,it)},
+                        onRetranscribe={follow=false;editingId=null;onRetranscribe(segment.id)}, canRetranscribe=!n.busy && n.audio.isNotBlank(),
+                        translation=translations.results[segment.id]?.takeIf { it.source==segment.text },
+                        onTranslate={follow=false;onTranslate(segment)}
+                    )
                 }
             }
         }
     }
-    n.segments.firstOrNull { it.id == deletingId }?.let { segment ->
+    remember(n.segments,deletingId) { if(deletingId==null) null else n.segments.firstOrNull { it.id == deletingId } }?.let { segment ->
         AlertDialog(
-            onDismissRequest = { deletingId = null }, title = { Text("Delete this segment?") },
+            onDismissRequest = { deletingId = null }, title = { Text("Clear this text?") },
             text = { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("This removes the text at ${timestamp(segment.start)}. The audio and transcription progress are kept.")
+                Text("Clear the text at ${timestamp(segment.start)}? Its timestamps and audio stay available. You can add text or retranscribe this section later.")
                 Text(segment.text, maxLines = 5, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
             } },
             confirmButton = { TextButton(onClick = {
                 if (editingId == segment.id) editingId = null
-                onDeleteSegment(segment.id); deletingId = null
-            }) { Text("Delete") } },
+                onClearSegment(segment.id); deletingId = null
+            }) { Text("Clear text") } },
             dismissButton = { TextButton(onClick = { deletingId = null }) { Text("Cancel") } }
         )
     }
@@ -409,4 +473,69 @@ private fun PlaybackSpeedMenu(speed: Float, enabled: Boolean, onSpeed: (Float) -
             }
         }
     }
+}
+
+/** A row only needs active/playing flags, not the continuously changing playback position. */
+@Composable
+private fun TranscriptSegmentRow(
+    segment: Segment, active: Boolean, playing: Boolean, ready: Boolean, editing: Boolean,
+    onTimestamp: () -> Unit, onPlayback: () -> Unit, onEdit: () -> Unit,
+    onDelete: () -> Unit, onText: (String) -> Unit, onRetranscribe: () -> Unit, canRetranscribe: Boolean,
+    translation: SegmentTranslation? = null, onTranslate: () -> Unit = {}
+) {
+                    Column(Modifier.fillMaxWidth().testTag("segment-${segment.id}")
+                        .background(if (active) MaterialTheme.colorScheme.secondaryContainer.copy(alpha = .5f) else MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp))
+                        .padding(12.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            TextButton(onClick = onTimestamp, contentPadding = PaddingValues(0.dp)) {
+                                Text(timestamp(segment.start), style = MaterialTheme.typography.labelMedium)
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            IconButton(onClick=onPlayback,enabled=ready,modifier=Modifier.testTag("segment-play-${segment.id}")) {
+                                Icon(if(playing) Icons.Outlined.Pause else Icons.Outlined.PlayArrow,
+                                    if(playing) "Pause segment" else "Play segment")
+                            }
+                            Spacer(Modifier.weight(1f))
+                            SegmentTranslateButton(segment.id, translation?.pending==true, segment.text.isNotBlank() && !editing,
+                                translation?.text!=null && translation.expanded, onTranslate)
+                            Box {
+                                var menuOpen by remember(segment.id) { mutableStateOf(false) }
+                                IconButton(onClick={menuOpen=true},modifier=Modifier.testTag("segment-menu-${segment.id}")) {
+                                    Icon(Icons.Outlined.MoreVert,"Segment actions")
+                                }
+                                DropdownMenu(expanded=menuOpen,onDismissRequest={menuOpen=false}) {
+                                    DropdownMenuItem(text={Text("Retranscribe")},leadingIcon={Icon(Icons.Outlined.Refresh,null)},
+                                        enabled=canRetranscribe,onClick={menuOpen=false;onRetranscribe()})
+                                    DropdownMenuItem(text={Text(if(editing) "Finish editing" else if(segment.text.isBlank()) "Add text" else "Edit text")},
+                                        leadingIcon={Icon(Icons.Outlined.Edit,null)},onClick={menuOpen=false;onEdit()})
+                                    DropdownMenuItem(text={Text("Clear text")},leadingIcon={Icon(Icons.Outlined.DeleteOutline,null)},
+                                        enabled=segment.text.isNotBlank(),onClick={menuOpen=false;onDelete()})
+                                }
+                            }
+                        }
+                        if (editing) {
+                            var text by rememberSaveable(segment.id) { mutableStateOf(segment.text) }
+                            OutlinedTextField(text, { text = it; onText(it) }, Modifier.fillMaxWidth(),
+                                supportingText = { Text("Saved automatically · timestamps preserved") })
+                        } else if(segment.text.isBlank()) {
+                            Text("No transcript",style=MaterialTheme.typography.bodyLarge,color=MaterialTheme.colorScheme.onSurfaceVariant)
+                        } else SelectionContainer {
+                            Text(segment.text, style = MaterialTheme.typography.bodyLarge, lineHeight = 27.sp)
+                        }
+                        if (translation?.error != null) {
+                            Text(translation.error, color=MaterialTheme.colorScheme.error, style=MaterialTheme.typography.bodySmall)
+                            TextButton(onClick=onTranslate) { Text("Retry translation") }
+                        }
+                        if (translation?.text != null && translation.expanded) {
+                            Column(Modifier.fillMaxWidth().testTag("translation-${segment.id}").padding(top=12.dp), verticalArrangement=Arrangement.spacedBy(8.dp)) {
+                                HorizontalDivider()
+                                Row(Modifier.fillMaxWidth(), verticalAlignment=Alignment.CenterVertically, horizontalArrangement=Arrangement.spacedBy(12.dp)) {
+                                    Text(TranslationCatalog.name(translation.target), modifier=Modifier.weight(1f), style=MaterialTheme.typography.labelMedium, color=MaterialTheme.colorScheme.primary)
+                                    TranslationAttribution()
+                                }
+                                SelectionContainer { Text(translation.text, style=MaterialTheme.typography.bodyLarge, lineHeight=27.sp) }
+                            }
+                        }
+
+                    }
 }
