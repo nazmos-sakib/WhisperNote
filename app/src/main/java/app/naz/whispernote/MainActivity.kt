@@ -82,6 +82,7 @@ class MainActivity: ComponentActivity() {
 @Composable fun WhisperNote(opened: String?,vm: NotesViewModel=viewModel(), incoming: Uri? = null, consumeIncoming: () -> Unit = {}, openRequest: Long = 0) {
     val translationVm: TranslationViewModel = viewModel()
     var translationModels by remember { mutableStateOf(false) }
+    var informationPage by rememberSaveable { mutableStateOf<String?>(null) }
     val notes by vm.notes.collectAsStateWithLifecycle()
     val error by vm.error.collectAsStateWithLifecycle()
     val labels by vm.labels.collectAsStateWithLifecycle()
@@ -109,10 +110,12 @@ class MainActivity: ComponentActivity() {
     LaunchedEffect(imported) { imported?.let { selected=it; vm.importedNote.value=null } }
     val note=notes.firstOrNull { it.id==selected }
     androidx.activity.compose.BackHandler(selected!=null) { selected=null }
-    if(note!=null) { Detail(note,query,vm,translationVm) { selected=null } }
+    if(informationPage != null) AppInformationScreen(privacy = informationPage == "privacy", onBack = { informationPage = null })
+    else if(note!=null) { Detail(note,query,vm,translationVm) { selected=null } }
     else ModalNavigationDrawer(drawerState=drawer,drawerContent={
         ModalDrawerSheet {
-            Column(Modifier.verticalScroll(rememberScrollState()).padding(12.dp)) {
+            Column(Modifier.fillMaxHeight()) {
+            Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(12.dp)) {
                 Text("WhisperNote",style=MaterialTheme.typography.headlineSmall,modifier=Modifier.padding(16.dp))
                 NavigationDrawerItem(label={Text("All notes · ${notes.size}")},selected=labelFilter==null,onClick={labelFilter=null;scope.launch {drawer.close()}},icon={Icon(Icons.AutoMirrored.Outlined.Notes,null)})
                 NavigationDrawerItem(label={Text("Unlabelled · ${notes.count { it.label==null }}")},selected=labelFilter=="",onClick={labelFilter="";scope.launch {drawer.close()}},icon={Icon(Icons.AutoMirrored.Outlined.LabelOff,null)})
@@ -134,6 +137,16 @@ class MainActivity: ComponentActivity() {
                 NavigationDrawerItem(label={Text("Translation models")},selected=false,onClick={scope.launch {drawer.close();translationModels=true}},icon={Icon(Icons.Outlined.Translate,null)})
                 NavigationDrawerItem(label={Text("Models")},selected=false,onClick={scope.launch {drawer.close();modelSheet=true}},icon={Icon(Icons.Outlined.Memory,null)})
                 NavigationDrawerItem(label={Text("Import complete note")},selected=false,onClick={if(transfer==null) {scope.launch {drawer.close()};archivePicker.launch(arrayOf("*/*"))}},icon={Icon(Icons.Outlined.FileOpen,null)})
+            }
+            HorizontalDivider()
+            Column(Modifier.padding(horizontal=12.dp, vertical=8.dp)) {
+                NavigationDrawerItem(label={Text("Privacy")}, selected=false,
+                    onClick={scope.launch {drawer.close();informationPage="privacy"}},
+                    icon={Icon(Icons.Outlined.PrivacyTip,null)})
+                NavigationDrawerItem(label={Text("Information")}, selected=false,
+                    onClick={scope.launch {drawer.close();informationPage="information"}},
+                    icon={Icon(Icons.Outlined.Info,null)})
+            }
             }
         }
     }) { Scaffold(
