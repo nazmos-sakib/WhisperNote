@@ -209,3 +209,10 @@ When the main activity stops (including backgrounding and screen lock, excluding
 ### Latest verification
 
 The selected-word lookup and five-minute background timeout passed local debug builds, Android lint and JVM tests. Timeout coverage includes returning before five minutes, a fresh countdown on the next background visit, expiration while the process is suspended, duplicate background events and cancellation on cleanup. Lookup coverage checks serialization with segment requests, replacement selections and rejection of dismissed or background-cancelled results. These latest changes were not installed or visually verified on the personal phone.
+
+
+## Project website
+
+The Jekyll website lives in `docs/`, using the Cayman theme with a shared, responsive layout. It includes an app overview, real demonstration screenshots, and a separate privacy policy with the maintainer’s contact email. See [website setup](docs/SETUP.md) for local preview and publishing instructions.
+
+After pushing, select **Settings → Pages → Deploy from a branch → main → /docs**. The intended URLs are `https://nazmos-sakib.github.io/WhisperNote/` and `https://nazmos-sakib.github.io/WhisperNote/privacy/`. Verify the deployment before adding the privacy URL to Play Console.

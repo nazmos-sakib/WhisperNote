@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  {% seo %}
+  <meta name="theme-color" content="#174e42">
+  <link rel="stylesheet" href="{{ '/assets/css/style.css' | relative_url }}">
+</head>
+<body>
+  <a class="skip-link" href="#content">Skip to content</a>
+  <header class="site-nav">
+    <a class="brand" href="{{ '/' | relative_url }}"><span class="brand-mark" aria-hidden="true">W</span>WhisperNote</a>
+    <nav aria-label="Main navigation">
+      <a href="{{ '/' | relative_url }}" {% if page.url == '/' %}aria-current="page"{% endif %}>Home</a>
+      <a href="{{ '/privacy/' | relative_url }}" {% if page.url == '/privacy/' %}aria-current="page"{% endif %}>Privacy</a>
+      <a href="https://github.com/nazmos-sakib/WhisperNote">GitHub <span aria-hidden="true">↗</span></a>
+    </nav>
+  </header>
+  <main id="content" class="{% if page.home %}landing{% else %}main-content policy{% endif %}">{{ content }}</main>
+  <footer class="site-footer">
+    <span>WhisperNote · An offline-first Android audio notebook.</span>
+    <div><a href="{{ '/privacy/' | relative_url }}">Privacy policy</a> · <a href="https://github.com/nazmos-sakib/WhisperNote/blob/main/LICENSE.md">License</a> · <a href="mailto:s.nazmos.sakib@gmail.com">Contact</a></div>
+    <small>Built with Jekyll and the Cayman theme. Hosted on GitHub Pages.</small>
+  </footer>
+</body>
+</html>

@@ -1,0 +1,13 @@
+title: WhisperNote
+description: Your audio. Your words. On your device.
+url: https://nazmos-sakib.github.io
+baseurl: /WhisperNote
+theme: jekyll-theme-cayman
+repository: nazmos-sakib/WhisperNote
+lang: en
+plugins:
+  - jekyll-seo-tag
+exclude:
+  - SETUP.md
+  - Gemfile
+  - Gemfile.lock
