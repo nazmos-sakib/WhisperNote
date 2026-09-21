@@ -46,6 +46,13 @@ class TranslationSession(private val factory: (TranslationPair) -> SegmentTransl
     private var runningPair: TranslationPair? = null
     val protectedPacks get() = (state.value.active?.packs ?: emptySet()) + (runningPair?.packs ?: emptySet())
 
+    companion object { const val LOOKUP_ID = "selection-lookup" }
+    fun lookup(text: String) {
+        invalidate(LOOKUP_ID)
+        request(LOOKUP_ID, text)
+    }
+    fun dismissLookup() = invalidate(LOOKUP_ID)
+
     fun enter(id: String) {
         if (noteId != id) { leave(); noteId = id }
     }
@@ -76,7 +83,7 @@ class TranslationSession(private val factory: (TranslationPair) -> SegmentTransl
     }
     fun reconcile(segments: List<Segment>) {
         val sources = segments.associate { it.id to it.text }
-        state.value.results.filter { (id, entry) -> sources[id] != entry.source }.keys.forEach(::invalidate)
+        state.value.results.filter { (id, entry) -> id != LOOKUP_ID && sources[id] != entry.source }.keys.forEach(::invalidate)
     }
     fun toggle(id: String) {
         val entry = state.value.results[id] ?: return

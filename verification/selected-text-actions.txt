@@ -1,0 +1,14 @@
+Selected-text actions
+
+Added native selectable transcript and translation text with Share… and Translate with… actions.
+Share uses ACTION_SEND/text/plain; Translate with uses ACTION_PROCESS_TEXT/text/plain and read-only=true.
+Only the highlighted substring is passed. No translation result is written back to the note.
+PROCESS_TEXT package visibility is declared; no matching handler produces a message suggesting Share.
+Android's process-text chooser may include other text tools as well as translation apps.
+
+Validation on A015 / Android 16:
+- assembleDebug and lintDebug passed.
+- Five DetailInteractionTest device tests passed.
+- Two SelectedTextActionsTest device tests passed: menu callback creation, exact selected-word share payload, reversed/invalid ranges.
+- Floating toolbar gesture test could not be confirmed in the locked-screen environment; callback tests exercise the native view and actual outgoing chooser intent.
+- connectedDebugAndroidTest installed the updated debug app.

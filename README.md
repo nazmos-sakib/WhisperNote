@@ -16,7 +16,10 @@ Android 7+ is supported on arm64 and x86_64. The APK contains the native engine 
 - MediaExtractor/MediaCodec decoding, mono float PCM at 16 kHz, streaming resampling to temporary disk storage, native mmap input.
 - Foreground processing queue, progress notification opening the note, failure messages, retry preserving audio, interrupted-job recovery on app restart.
 - Finalized segments stream to SQLite and the UI during inference, with atomic millisecond resume checkpoints, automatic language detection, and title/segment autosave.
-- Playback, seeking, ±10 seconds, tap-to-play timestamps, active-segment highlighting, optional follow playback.
+- Background audio playback with notification/lock-screen controls, library mini-player, remembered position, playback speed, seeking, ±10 seconds, active-segment highlighting and optional follow playback.
+- On-demand offline segment translation with ten language pairs, downloadable/removable ML Kit packs, inline results and loading feedback.
+- Long-press word or phrase translation in a bottom sheet, with copy and external-app translation actions. Selected text can also be shared.
+- Translation models stay active for five continuous minutes in the background; returning sooner cancels the unload countdown.
 - TXT, Markdown, SRT exports to a chosen document destination or Android sharing.
 - Confirmation before deletion and optional deletion of app-owned audio. External source files are never deleted.
 - System light/dark theme. Cloud backup and device migration of private app data are disabled.
@@ -30,15 +33,25 @@ Android 7+ is supported on arm64 and x86_64. The APK contains the native engine 
 - `core/WhisperEngine.kt`, `cpp/bridge.cpp`: narrow JNI boundary and streaming inference.
 - `core/ModelManager.kt`: Standard/Q5 catalog, persistent import preference, serialized downloads, integrity checks, atomic model publication.
 - `core/ProcessingService.kt`: serialized foreground jobs, persistent status, platform timeout handling.
-- `core/AudioPlayer.kt`: independent playback lifecycle and StateFlow.
+- `core/AudioPlayer.kt`, `core/PlaybackService.kt`: service-owned playback, audio focus, media-session/notification controls and StateFlow.
+- `TranslationViewModel.kt`, `core/TranslationSession.kt`: ML Kit pack management, serialized inference and temporary detail-session results.
+- `SelectableTranscriptText.kt`, `SelectedTranslationSheet.kt`: native selection actions, word/phrase lookup and external-app handoff.
+- `core/BackgroundTranslationTimeout.kt`: cancellable five-minute background timeout with an elapsed-time check on return.
 - `cpp/whisper`: pinned upstream source; upstream MIT license and notices are retained.
 
 ## Verification
 
 ```
 ./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
+```
+
+Run connected instrumentation only on a disposable emulator or dedicated test device with no personal notes:
+
+```
 ./gradlew :app:connectedDebugAndroidTest
 ```
+
+Connected-test installation/cleanup can uninstall the main app and delete its private notes, imported audio and downloaded models. Do not run it against your everyday WhisperNote installation. Automatic backup is disabled; export complete `.whispernote` archives to a separate location for a portable backup. A normal compatible app update preserves data, but uninstalling or clearing app storage does not.
 
 The connected test copies the upstream JFK WAV sample, decodes it, downloads Tiny once, performs real native inference, and checks language, timestamps, and recognized content. It requires internet for the first model download. Re-running with the model installed exercises inference without a download.
 
@@ -65,7 +78,7 @@ Leaving the screen normally does not interrupt the foreground service. Force-sto
 
 Existing saved notes remain compatible; older records without a checkpoint default to zero. Work performed by older versions without streaming persistence cannot be recovered retroactively.
 
-`CheckpointTest` covers checkpoint invariants and edit preservation. `ResumeTranscriptionTest` interrupts real native inference after a saved segment, reopens the SQLite database, checks interrupted recovery, and resumes the remaining audio. `TranscriptUiTest` checks the incomplete banner/resume timestamp and live detail updates. Run device tests on a test device; Gradle's connected-test task may uninstall test applications. To preserve an installed development app's data, install both APKs with `adb install -r` and invoke the instrumentation runner directly.
+`CheckpointTest` covers checkpoint invariants and edit preservation. `ResumeTranscriptionTest` interrupts real native inference after a saved segment, reopens the SQLite database, checks interrupted recovery, and resumes the remaining audio. `TranscriptUiTest` checks the incomplete banner/resume timestamp and live detail updates. Run device tests only on a disposable emulator or dedicated test device. Gradle's connected-test task may uninstall the main application as well as the test APK; replacement installation alone is not a substitute for test-data isolation.
 
 ### Checkpoint verification on 2026-09-16
 
@@ -91,7 +104,7 @@ Downloads are staged separately from inference-ready `.bin` files. The UI shows 
 
 ### Reproducible on-device benchmark
 
-`PerformanceBenchmarkTest` is opt-in and uses the bundled 11-second JFK WAV, explicit English, four native threads, and fresh model contexts per run. Download time is excluded. It reports PCM decode time, context/model load time, inference time, total native-call time, first-segment time, and Android's thermal status. It does not write library notes. Install main/test APKs with `adb install -r` rather than uninstalling the user's app.
+`PerformanceBenchmarkTest` is opt-in and uses the bundled 11-second JFK WAV, explicit English, four native threads, and fresh model contexts per run. Download time is excluded. It reports PCM decode time, context/model load time, inference time, total native-call time, first-segment time, and Android's thermal status. It does not write library notes. Use a dedicated test device or disposable emulator; do not benchmark against an installation containing personal notes.
 
 ```
 adb shell am instrument -w \
@@ -131,7 +144,7 @@ Validation: JVM tests, Android lint (no errors), and APK builds passed. Device c
 
 ### Remember listening position
 
-Each note remembers its last audio position on this device. Reopening seeks to that position after the audio prepares and stays paused. Positions are saved on pause, seek and player disposal, plus every five seconds while listening. Normal navigation saves the latest position; an abrupt process termination can lose the last few seconds. Missing or unprepared audio does not overwrite an existing position. Listening progress is stored separately from transcription checkpoints and note modification dates, is not included in shared archives, and is removed when its note is deleted.
+Each note remembers its last audio position on this device. When no playback session is active for that note, reopening shows the saved position and stays paused until Play is pressed. Reopening a currently playing note reconnects to its ongoing playback. Positions are saved on pause, seek and player disposal, plus every five seconds while listening. Normal navigation saves the latest position; an abrupt process termination can lose the last few seconds. Missing or unprepared audio does not overwrite an existing position. Listening progress is stored separately from transcription checkpoints and note modification dates, is not included in shared archives, and is removed when its note is deleted.
 
 ### Playback speed
 
@@ -163,10 +176,36 @@ Google Translate powers segment translation through ML Kit (`com.google.mlkit:tr
 
 Open **Translation models** in the drawer, or **Manage translation models** from the detail toolbar's translation button. Ten pairs are available: German, French, Spanish, Italian, Portuguese, Dutch, Turkish and Ukrainian to English; German to Bengali/Bangla and Hindi. Downloads default to Wi-Fi only, with an explicit option to allow another network. ML Kit manages language packs (roughly 30 MB each); English is built in. Pair readiness reflects all required packs. German is shared by its three pairs. The downloaded-pack list supports removal with a preview of affected pairs; packs used by an active or finishing translator cannot be removed.
 
-In a note, activate a downloaded pair from the toolbar. Tap the translation icon beside a segment's playback/menu controls to translate only that segment's current text. A circular indeterminate progress indicator surrounds the icon while queued or running. Requests execute one at a time; repeated pending taps do not enqueue duplicates. Results expand below the original with a language label and Google Translate attribution; tap the icon again to collapse/reopen. A failed request offers inline retry. No automatic whole-note translation occurs.
+In a note, activate a downloaded pair from the toolbar. Tap the translation icon beside a segment's playback/menu controls to translate only that segment's current text. A circular indeterminate progress indicator surrounds the icon while queued or running. Requests execute one at a time; repeated pending taps do not enqueue duplicates. Results expand below the original with a language label and a compact Google Translate attribution badge on the same heading row; tap the icon again to collapse/reopen. A failed request offers inline retry. No automatic whole-note translation occurs.
 
 Results are held only in the detail session's ViewModel: rotation preserves them, leaving the note clears them, and process death discards them. Nothing is written to notes, exports, or archives. Editing/clearing/replacing source text invalidates its result; changing the target language clears results. Deactivation keeps completed results visible but drops pending requests. An in-flight ML Kit task finishes before its client is closed; late results from edits, old language selections or closed notes are discarded. ML Kit controls internal allocation, so activation prepares a client and first translation may incur model-loading latency; this is not an exact RAM-residency control.
 
 Offline translation quality varies. German-to-Bengali/Hindi uses English as an intermediate language. Models are downloaded on request; opening the app does not download translation packs.
 
-Verification: 26 JVM tests and Android lint (zero errors) passed; debug app and test APKs built. Twelve targeted device tests passed across translation UI/model management, real German→English/Bengali/Hindi inference, rotation/navigation lifetime, and existing transcript/playback interactions. The final debug APK was installed on the connected A015 preserving app data. German, Bengali and Hindi packs are available from the real-engine checks. See `verification/on-demand-translation.txt` for details and the test-window/layout corrections found during verification.
+Verification: 26 JVM tests and Android lint (zero errors) passed; debug app and test APKs built. Twelve targeted device tests passed across translation UI/model management, real German→English/Bengali/Hindi inference, rotation/navigation lifetime, and existing transcript/playback interactions. These are historical functional checks, not a guarantee of data-preserving test installation. Later connected-test runs removed the installed app and its private data; device tests must now use an isolated test environment. See `verification/on-demand-translation.txt` for details and the test-window/layout corrections found during verification.
+
+
+### Translate a selected word or phrase
+
+Long-press a word in the original transcript, adjust the selection handles if needed, and choose **Translate**. A bottom sheet displays the selected text, active language direction, a loading spinner and the translation. It uses the same active ML Kit client and serial queue as segment translation. If no model is active, the existing model selector opens first and translation starts after activation.
+
+Use **Copy translation** to copy the result or **Translate with another app…** to send the original selection for an independent translation. **Done** or dismissing the sheet discards the lookup; late results cannot reopen it. Lookup results are temporary and never enter the note database, exports or archives. The segment translation button still translates the entire segment inline. A word lookup is machine translation, not a dictionary entry with all possible meanings; selecting a phrase can provide useful context.
+
+### Share selected text with other apps
+
+Original and translated text use Android's native selection menu. **Share…** opens the Android share sheet with only the highlighted text. **Translate with…** opens compatible installed text-processing apps; Android may also list text tools that are not translators. When no text-processing app is available, the action falls back to sharing. No API key is needed for this handoff; the receiving app controls its own translation, connectivity and display. External results are not inserted into the transcript automatically.
+
+Menu placement and standard actions such as Copy, Select all and Read aloud depend on Android and installed apps. Extra actions may appear in the overflow menu. The in-app **Translate** action is offered on original transcript text; translated output retains sharing and external-app actions.
+
+### Background audio playback
+
+Playback continues by default when leaving a note, switching apps, or locking the screen. A dedicated, non-exported `mediaPlayback` foreground service owns the single player, audio focus, wake lock and Android media session. Playback starts only after an explicit Play action. Notification/lock-screen controls provide play/pause, 10-second skips and Stop; the notification returns to the playing note. The library mini-player offers reopen, pause/resume and Stop. Browsing or scrubbing another note does not replace the current audio; playing that note does. Stop releases the player and removes the notification, preserving listening position. Paused playback is demoted from foreground status, and the service does not auto-restart after process termination.
+
+Headphone disconnection pauses audio. Transient audio-focus interruptions pause and then resume when focus returns; permanent focus loss pauses until the user resumes. The original per-note position checkpoints and playback speeds remain supported. The service remains independent of transcription processing.
+
+When the main activity stops (including backgrounding and screen lock, excluding rotation), its translation model remains active for five continuous minutes. Returning sooner cancels the timeout; each later background visit gets a fresh five minutes. At the deadline, its translation session deactivates. If Android suspends the process, an expired deadline is also checked before reuse on return. Queued translation requests are dropped; any running ML Kit operation completes before its client closes. Completed inline results remain in memory until leaving the note, and returning after expiration does not reactivate the translator automatically. Background audio is unaffected. Android may reclaim the process earlier under memory pressure.
+
+
+### Latest verification
+
+The selected-word lookup and five-minute background timeout passed local debug builds, Android lint and JVM tests. Timeout coverage includes returning before five minutes, a fresh countdown on the next background visit, expiration while the process is suspended, duplicate background events and cancellation on cleanup. Lookup coverage checks serialization with segment requests, replacement selections and rejection of dismissed or background-cancelled results. These latest changes were not installed or visually verified on the personal phone.

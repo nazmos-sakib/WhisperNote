@@ -21,6 +21,7 @@ import java.util.concurrent.TimeUnit
 
 class TranslationLifecycleTest {
     @get:Rule val compose = createEmptyComposeRule()
+    @org.junit.Before fun wakeDisplay() { wakeUiTestDisplay() }
     @Test fun realInlineTranslationSurvivesRecreationButNotLeavingNote() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val app = instrumentation.targetContext.applicationContext as WhisperApp
@@ -49,6 +50,15 @@ class TranslationLifecycleTest {
                 scenario.onActivity { it.showUiTestWindow() }
                 compose.waitUntil(10000) { runCatching { compose.onAllNodesWithTag("translation-${segment.id}").fetchSemanticsNodes().isNotEmpty() }.getOrDefault(false) }
                 scenario.onActivity { assertNotNull(ViewModelProvider(it)[TranslationViewModel::class.java].session.state.value.active) }
+                scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+                scenario.onActivity {
+                    val state=ViewModelProvider(it)[TranslationViewModel::class.java].session.state.value
+                    assertNotNull(state.active)
+                    assertNotNull(state.results[segment.id]?.text)
+                }
+                scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+                scenario.onActivity { it.showUiTestWindow() }
+                compose.onNodeWithTag("translation-${segment.id}").assertExists()
                 compose.onNodeWithContentDescription("Back").performClick()
                 compose.waitForIdle()
                 scenario.onActivity {

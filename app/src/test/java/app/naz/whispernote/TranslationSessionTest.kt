@@ -14,6 +14,37 @@ class TranslationSessionTest {
         fun fail() { val cb = callback!!; callback = null; cb(Result.failure(IllegalStateException("Offline model missing"))) }
         override fun close() { check(!closed); closed = true }
     }
+    @Test fun lookupSharesQueueSurvivesReconcileAndDismissRejectsLateResult() {
+        val engine = Fake()
+        val session = TranslationSession { engine }
+        session.enter("note"); session.activate(TranslationPair("de", "en"))
+        session.request("segment", "Guten Tag zusammen")
+        session.lookup("Tag")
+        session.reconcile(listOf(Segment(0, 100, "Guten Tag zusammen", "segment")))
+        assertTrue(session.state.value.results.getValue(TranslationSession.LOOKUP_ID).pending)
+        assertEquals(listOf("Guten Tag zusammen"), engine.inputs)
+        engine.finish("Hello everyone")
+        assertEquals(listOf("Guten Tag zusammen", "Tag"), engine.inputs)
+        session.dismissLookup()
+        engine.finish("day")
+        assertFalse(session.state.value.results.containsKey(TranslationSession.LOOKUP_ID))
+        assertEquals("Hello everyone", session.state.value.results.getValue("segment").text)
+    }
+
+    @Test fun newSelectionRejectsOldLookupAndBackgroundClearsPendingWork() {
+        val engine = Fake()
+        val session = TranslationSession { engine }
+        session.enter("note"); session.activate(TranslationPair("de", "en"))
+        session.lookup("Tag"); session.lookup("Nacht")
+        engine.finish("day")
+        assertNull(session.state.value.results.getValue(TranslationSession.LOOKUP_ID).text)
+        assertEquals(listOf("Tag", "Nacht"), engine.inputs)
+        session.deactivate()
+        engine.finish("night")
+        assertTrue(engine.closed)
+        assertFalse(session.state.value.results.containsKey(TranslationSession.LOOKUP_ID))
+    }
+
     @Test fun exactSegmentOnlySerialQueueAndDuplicateSuppression() {
         val engine = Fake()
         val session = TranslationSession { engine }

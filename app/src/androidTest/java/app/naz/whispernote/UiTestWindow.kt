@@ -15,3 +15,9 @@ fun ComponentActivity.showUiTestWindow() {
     }
     window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 }
+
+/** Wake the display before launching a fixture; keep the secure device lock intact. */
+fun wakeUiTestDisplay() {
+    val ui = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().uiAutomation
+    android.os.ParcelFileDescriptor.AutoCloseInputStream(ui.executeShellCommand("input keyevent KEYCODE_WAKEUP")).use { it.readBytes() }
+}

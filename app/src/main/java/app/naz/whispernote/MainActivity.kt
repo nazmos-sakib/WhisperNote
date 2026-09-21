@@ -38,10 +38,12 @@ import kotlinx.coroutines.launch
 
 class MainActivity: ComponentActivity() {
     private val opened= kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+    private val openGeneration= kotlinx.coroutines.flow.MutableStateFlow(0L)
     private val incoming= kotlinx.coroutines.flow.MutableStateFlow<Uri?>(null)
     @Suppress("DEPRECATION")
     private fun receive(intent: Intent) {
         opened.value=intent.getStringExtra("noteId")
+        if (opened.value != null) openGeneration.value++
         incoming.value=when(intent.action) {
             Intent.ACTION_VIEW -> intent.data
             Intent.ACTION_SEND -> intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
@@ -54,13 +56,22 @@ class MainActivity: ComponentActivity() {
         enableEdgeToEdge()
         setContent { WhisperNoteTheme {
             val id by opened.collectAsState(); val uri by incoming.collectAsState()
-            WhisperNote(id,incoming=uri,consumeIncoming={incoming.value=null;setIntent(Intent(this,MainActivity::class.java))})
+            val generation by openGeneration.collectAsState()
+            WhisperNote(id,openRequest=generation,incoming=uri,consumeIncoming={incoming.value=null;setIntent(Intent(this,MainActivity::class.java))})
         } }
     }
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); receive(intent) }
+    override fun onStart() {
+        super.onStart()
+        androidx.lifecycle.ViewModelProvider(this)[TranslationViewModel::class.java].onForeground()
+    }
     override fun onResume() {
         super.onResume()
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    }
+    override fun onStop() {
+        super.onStop()
+        if (!isChangingConfigurations) androidx.lifecycle.ViewModelProvider(this)[TranslationViewModel::class.java].onBackground()
     }
     override fun onPause() {
         super.onPause()
@@ -68,7 +79,7 @@ class MainActivity: ComponentActivity() {
     }
 }
 @OptIn(ExperimentalMaterial3Api::class)
-@Composable fun WhisperNote(opened: String?,vm: NotesViewModel=viewModel(), incoming: Uri? = null, consumeIncoming: () -> Unit = {}) {
+@Composable fun WhisperNote(opened: String?,vm: NotesViewModel=viewModel(), incoming: Uri? = null, consumeIncoming: () -> Unit = {}, openRequest: Long = 0) {
     val translationVm: TranslationViewModel = viewModel()
     var translationModels by remember { mutableStateOf(false) }
     val notes by vm.notes.collectAsStateWithLifecycle()
@@ -89,10 +100,12 @@ class MainActivity: ComponentActivity() {
     var model by rememberSaveable { mutableStateOf(vm.models.preferredModel) }
     var url by rememberSaveable { mutableStateOf("") }
     val context=LocalContext.current
+    val playbackController = (context.applicationContext as WhisperApp).playback
+    val listening by playbackController.state.collectAsStateWithLifecycle()
     val picker=rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { it?.let { vm.import(it,model,labelFilter?.takeIf { it.isNotEmpty() }) }; importing=false }
     val archivePicker=rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { it?.let(vm::importArchive) }
     val permission=rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
-    LaunchedEffect(opened) { if(opened!=null) selected=opened }
+    LaunchedEffect(opened,openRequest) { if(opened!=null) selected=opened }
     LaunchedEffect(imported) { imported?.let { selected=it; vm.importedNote.value=null } }
     val note=notes.firstOrNull { it.id==selected }
     androidx.activity.compose.BackHandler(selected!=null) { selected=null }
@@ -125,6 +138,9 @@ class MainActivity: ComponentActivity() {
         }
     }) { Scaffold(
         topBar={ TopAppBar(title={ Text(labelFilter?.ifEmpty { "Unlabelled" } ?: "WhisperNote",fontWeight=FontWeight.Bold) },navigationIcon={IconButton(onClick={scope.launch {drawer.open()}}) {Icon(Icons.Outlined.Menu,"Open navigation drawer")}}) },
+        bottomBar={ listening?.let { audio ->
+            ListeningMiniPlayer(audio, onOpen={selected=audio.noteId}, onToggle={playbackController.toggle()}, onStop={playbackController.stop()})
+        } },
         floatingActionButton={ ExtendedFloatingActionButton(onClick={importing=true},icon={Icon(Icons.Outlined.Add,null)},text={Text("New transcription")}) }
     ) { padding -> Column(Modifier.fillMaxSize().padding(padding).padding(horizontal=20.dp)) {
         Text("A little space for every spoken thought.",style=MaterialTheme.typography.bodyLarge,color=MaterialTheme.colorScheme.onSurfaceVariant)
@@ -218,5 +234,19 @@ class MainActivity: ComponentActivity() {
             }
         }
         error?.let { Text(it,color=MaterialTheme.colorScheme.error) }
+    }
+}
+
+@Composable
+private fun ListeningMiniPlayer(audio: Listening, onOpen: () -> Unit, onToggle: () -> Unit, onStop: () -> Unit) {
+    Surface(tonalElevation=3.dp, modifier=Modifier.fillMaxWidth()) {
+        Row(Modifier.navigationBarsPadding().padding(horizontal=12.dp, vertical=4.dp), verticalAlignment=Alignment.CenterVertically) {
+            Column(Modifier.weight(1f).clickable(onClick=onOpen).padding(8.dp)) {
+                Text(audio.title, maxLines=1, overflow=TextOverflow.Ellipsis, style=MaterialTheme.typography.titleSmall)
+                Text(audio.playback.error ?: "${timestamp(audio.playback.position)} · ${if(audio.playback.playing) "Playing" else if(!audio.playback.ready) "Preparing…" else "Paused"}", maxLines=1, overflow=TextOverflow.Ellipsis, style=MaterialTheme.typography.bodySmall)
+            }
+            IconButton(onClick=onToggle) { Icon(if(audio.playback.playing) Icons.Outlined.Pause else Icons.Outlined.PlayArrow, if(audio.playback.playing) "Pause audio" else "Resume audio") }
+            IconButton(onClick=onStop) { Icon(Icons.Outlined.Close,"Stop audio") }
+        }
     }
 }

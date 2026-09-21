@@ -27,6 +27,20 @@ data class TranslationModelsState(
 
 class TranslationViewModel : ViewModel() {
     val session = TranslationSession(::MlKitSegmentTranslator)
+    private val timeoutHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val backgroundTimeout = BackgroundTranslationTimeout(
+        now = android.os.SystemClock::elapsedRealtime,
+        schedule = { delay, action ->
+            val runnable = Runnable { action() }
+            timeoutHandler.postDelayed(runnable, delay)
+            val cancel: () -> Unit = { timeoutHandler.removeCallbacks(runnable) }
+            cancel
+        },
+        deactivate = session::deactivate
+    )
+    fun onForeground() = backgroundTimeout.foreground()
+    fun onBackground() = backgroundTimeout.background()
+
     private val manager = RemoteModelManager.getInstance()
     private val mutable = MutableStateFlow(TranslationModelsState())
     val models = mutable.asStateFlow()
@@ -77,5 +91,5 @@ class TranslationViewModel : ViewModel() {
             .addOnSuccessListener { if (!disposed) { mutable.value = mutable.value.copy(busy = null, downloaded = mutable.value.downloaded - code); refresh() } }
             .addOnFailureListener { if (!disposed) mutable.value = mutable.value.copy(busy = null, error = it.localizedMessage ?: "Could not remove model.") }
     }
-    override fun onCleared() { disposed = true; session.leave() }
+    override fun onCleared() { backgroundTimeout.clear(); disposed = true; session.leave() }
 }

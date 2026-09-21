@@ -1,0 +1,25 @@
+Background playback verification — 2026-09-18
+
+Implementation:
+- Non-exported mediaPlayback foreground service owns one native MediaPlayer wrapper and Android MediaSession.
+- Library mini-player; notification/lock-screen media commands: play/pause, +/-10 seconds, stop, reopen note.
+- Explicit Play required; opening another note does not interrupt current playback.
+- Background and navigation preserve playback; pause/stop retain per-note listening position.
+- Transient audio focus loss pauses/resumes; permanent loss or headphone-disconnect broadcast pauses.
+- Wake lock follows MediaPlayer playback; paused service demotes from foreground; no automatic process restart.
+- Activity onStop (except rotation) deactivates translation, drops queued work and closes an in-flight client after completion. Completed text is retained until leaving the note.
+
+Build: :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest passed.
+26 JVM tests passed; lint zero errors.
+
+Device: connected A015.
+Final combined run: OK (10 tests), 25.6 seconds.
+- BackgroundPlaybackTest (2): navigation/background survival; notification media token, pause/resume/skips/stop; repeated notification reopen; saved position; single active note; transient focus interruption; background translation deactivation.
+- TranslationLifecycleTest (1): real translated output survives rotation and background while model deactivates; navigation clears results.
+- PlaybackResumeTest (2): saved position and speed behavior; failed preparation does not erase position.
+- DetailInteractionTest (5): existing player, seek, follow, speed and editing UI.
+
+Tests use temporary silent WAV fixtures and clean up their notes/files. Initial activity-start timeouts were caused by the sleeping device display. Test setup now wakes the display without unlocking or disabling the secure lock.
+
+Physical headphone removal and live telephone calls were not exercised; the headphone receiver is wired to pause, and Android audio-focus interruption was tested with a competing transient focus request.
+Final debug APK installed with replacement, preserving existing app data.

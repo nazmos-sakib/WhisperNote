@@ -22,6 +22,8 @@ class AudioPlayer(
     private var ticksSinceSave=0
     init {
         try {
+            player.setAudioAttributes(android.media.AudioAttributes.Builder().setUsage(android.media.AudioAttributes.USAGE_MEDIA).setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH).build())
+            player.setWakeMode(context.applicationContext, android.os.PowerManager.PARTIAL_WAKE_LOCK)
             player.setDataSource(context,Uri.parse(uri))
             player.setOnSeekCompleteListener {
                 seeking=false
@@ -40,7 +42,7 @@ class AudioPlayer(
                 checkpoint()
             }
             player.setOnErrorListener { _,_,_ ->
-                state.value=state.value.copy(error="Cannot play this audio.",ready=false)
+                state.value=state.value.copy(error="Cannot play this audio.",ready=false,playing=false)
                 prepared=false
                 true
             }
@@ -74,6 +76,20 @@ class AudioPlayer(
             if(!wasPlaying && player.isPlaying) player.pause()
             state.value=state.value.copy(playing=player.isPlaying,error="Cannot change playback speed for this audio.")
         }
+    }
+    fun play() {
+        if (!state.value.ready || released) return
+        try {
+            if (state.value.position >= state.value.duration && state.value.duration > 0) seek(0)
+            player.start()
+            state.value = state.value.copy(playing=true, error=null)
+        } catch (e: Exception) { state.value=state.value.copy(playing=false, error="Cannot play this audio.") }
+    }
+    fun pause() {
+        if (!prepared || released) return
+        if (player.isPlaying) player.pause()
+        state.value=state.value.copy(playing=false,position=if(seeking) state.value.position else player.currentPosition.toLong())
+        checkpoint()
     }
     fun toggle() {
         if(state.value.ready) {

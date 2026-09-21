@@ -24,7 +24,6 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.Label
@@ -66,7 +65,7 @@ import java.text.DateFormat
 import java.util.Date
 import kotlin.math.abs
 
-/** Owns playback and persistence; the content below is also usable with deterministic playback in tests. */
+/** Observes service-owned playback; the content below is also usable with deterministic playback in tests. */
 @Composable
 fun Detail(n: Note, query: String, vm: NotesViewModel, translationVm: TranslationViewModel = androidx.lifecycle.viewmodel.compose.viewModel(), back: () -> Unit) {
     val context = LocalContext.current
@@ -74,6 +73,8 @@ fun Detail(n: Note, query: String, vm: NotesViewModel, translationVm: Translatio
     val translations by translationSession.state.collectAsStateWithLifecycle()
     var translatorSheet by rememberSaveable(n.id) { mutableStateOf(false) }
     var translationModels by rememberSaveable(n.id) { mutableStateOf(false) }
+    var lookupText by rememberSaveable(n.id) { mutableStateOf<String?>(null) }
+    var lookupPairLabel by rememberSaveable(n.id) { mutableStateOf<String?>(null) }
     var pendingTranslationId by rememberSaveable(n.id) { mutableStateOf<String?>(null) }
     DisposableEffect(n.id, translationSession) {
         translationSession.enter(n.id)
@@ -90,27 +91,30 @@ fun Detail(n: Note, query: String, vm: NotesViewModel, translationVm: Translatio
         onDismiss = { translatorSheet = false; pendingTranslationId = null },
         onActivated = {
             translatorSheet = false
+            lookupText?.let { lookupPairLabel = translationSession.state.value.active?.label; translationSession.lookup(it) }
             n.segments.firstOrNull { it.id == pendingTranslationId }?.let { translationSession.request(it.id, it.text) }
             pendingTranslationId = null
         })
     if (translationModels) TranslationModelsSheet(translationVm) { translationModels = false }
+    if (lookupText != null && !translatorSheet && !translationModels) SelectedTranslationSheet(
+        source = lookupText!!, pairLabel = lookupPairLabel,
+        result = translations.results[TranslationSession.LOOKUP_ID],
+        onRetry = {
+            if (translations.active == null) translatorSheet = true
+            else { lookupPairLabel = translations.active?.label; translationSession.lookup(lookupText!!) }
+        },
+        onDismiss = { lookupText = null; lookupPairLabel = null; translationSession.dismissLookup() }
+    )
     val positions = remember(context) { PlaybackPositions(context) }
-    val player = remember(n.id, n.audio) {
-        n.audio.takeIf { it.isNotEmpty() }?.let { audio ->
-            AudioPlayer(context,audio,positions.get(n.id)) { position -> positions.save(n.id,position) }
-        }
+    val player = (context.applicationContext as WhisperApp).playback
+    val listening by player.state.collectAsStateWithLifecycle()
+    var idlePosition by rememberSaveable(n.id) { mutableLongStateOf(positions.get(n.id)) }
+    var idleSpeed by rememberSaveable(n.id) { mutableFloatStateOf(1f) }
+    LaunchedEffect(listening?.noteId, n.id) {
+        if (listening?.noteId != n.id) idlePosition = positions.get(n.id)
     }
-    DisposableEffect(player) { onDispose { player?.release() } }
-    val lifecycle = LocalLifecycleOwner.current.lifecycle
-    DisposableEffect(player, lifecycle) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP && player?.state?.value?.playing == true) player.toggle()
-        }
-        lifecycle.addObserver(observer)
-        onDispose { lifecycle.removeObserver(observer) }
-    }
-    val emptyPlayback = remember { kotlinx.coroutines.flow.MutableStateFlow(Playback()) }
-    val playback by (player?.state ?: emptyPlayback).collectAsStateWithLifecycle()
+    val playback = listening?.takeIf { it.noteId == n.id }?.playback
+        ?: Playback(ready=n.audio.isNotBlank(), position=idlePosition, duration=n.duration, speed=idleSpeed)
     val scope = rememberCoroutineScope()
     var deleting by remember { mutableStateOf(false) }
     var deleteAudio by remember { mutableStateOf(true) }
@@ -135,14 +139,24 @@ fun Detail(n: Note, query: String, vm: NotesViewModel, translationVm: Translatio
         onTitleChange = { vm.title(n.id, it) },
         onSegmentChange = { id, text -> translationSession.invalidate(id); vm.segment(n.id, id, text) },
         onClearSegment = { translationSession.invalidate(it); vm.clearSegment(n.id, it) },
-        onTogglePlayback = { player?.toggle() },
-        onSeek = { position, play -> player?.seek(position, play) },
+        onTogglePlayback = { player.toggle(n, if(listening?.noteId==n.id) null else idleSpeed) },
+        onSeek = { position, play ->
+            if (listening?.noteId==n.id || play) player.command(PlaybackService.SEEK, n, position, play, if(listening?.noteId==n.id) null else idleSpeed)
+            else { idlePosition=position.coerceIn(0,n.duration); positions.save(n.id,idlePosition) }
+        },
         onRetry = { vm.start(n.id) }, onExport = { export = true },
-        onDeleteNote = { deleting = true }, onBack = back, onLabel = { choosingLabel=true }, onSpeed = { player?.setSpeed(it) },
+        onDeleteNote = { deleting = true }, onBack = back, onLabel = { choosingLabel=true }, onSpeed = { idleSpeed=it; if(listening?.noteId==n.id) player.speed(n, it) },
         onRetranscribe={retrySegmentId=it}, retryStatus=draft?.status,
         onReviewRetry={retrySegmentId=draft?.original?.id},
         translations = translations,
         onTranslator = { pendingTranslationId = null; translatorSheet = true },
+        onLookup = { selected ->
+            lookupText = selected
+            lookupPairLabel = translations.active?.label
+            translationSession.dismissLookup()
+            if (translations.active == null) { pendingTranslationId = null; translatorSheet = true }
+            else translationSession.lookup(selected)
+        },
         onTranslate = { segment ->
             val result = translations.results[segment.id]
             if (result?.text != null && result.source == segment.text) translationSession.toggle(segment.id)
@@ -163,7 +177,7 @@ fun Detail(n: Note, query: String, vm: NotesViewModel, translationVm: Translatio
                 Checkbox(deleteAudio, { deleteAudio = it }); Text("Also delete the imported audio copy")
             }
         } },
-        confirmButton = { TextButton(onClick = { vm.delete(n, deleteAudio); deleting = false; back() }) { Text("Delete") } },
+        confirmButton = { TextButton(onClick = { if (listening?.noteId == n.id) player.stop(); vm.delete(n, deleteAudio); deleting = false; back() }) { Text("Delete") } },
         dismissButton = { TextButton(onClick = { deleting = false }) { Text("Cancel") } }
     )
     if (export) AlertDialog(
@@ -226,6 +240,7 @@ internal fun TranscriptDetailContent(
     onReviewRetry: () -> Unit = {},
     translations: TranslationSessionState = TranslationSessionState(),
     onTranslator: () -> Unit = {},
+    onLookup: (String) -> Unit = {},
     onTranslate: (Segment) -> Unit = {}
 ) {
     var title by rememberSaveable(n.id) { mutableStateOf(n.title) }
@@ -374,7 +389,8 @@ internal fun TranscriptDetailContent(
                         onText={follow=false;onSegmentChange(segment.id,it)},
                         onRetranscribe={follow=false;editingId=null;onRetranscribe(segment.id)}, canRetranscribe=!n.busy && n.audio.isNotBlank(),
                         translation=translations.results[segment.id]?.takeIf { it.source==segment.text },
-                        onTranslate={follow=false;onTranslate(segment)}
+                        onTranslate={follow=false;onTranslate(segment)},
+                        onLookup={follow=false;onLookup(it)}
                     )
                 }
             }
@@ -481,7 +497,7 @@ private fun TranscriptSegmentRow(
     segment: Segment, active: Boolean, playing: Boolean, ready: Boolean, editing: Boolean,
     onTimestamp: () -> Unit, onPlayback: () -> Unit, onEdit: () -> Unit,
     onDelete: () -> Unit, onText: (String) -> Unit, onRetranscribe: () -> Unit, canRetranscribe: Boolean,
-    translation: SegmentTranslation? = null, onTranslate: () -> Unit = {}
+    translation: SegmentTranslation? = null, onTranslate: () -> Unit = {}, onLookup: (String) -> Unit = {}
 ) {
                     Column(Modifier.fillMaxWidth().testTag("segment-${segment.id}")
                         .background(if (active) MaterialTheme.colorScheme.secondaryContainer.copy(alpha = .5f) else MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp))
@@ -519,9 +535,7 @@ private fun TranscriptSegmentRow(
                                 supportingText = { Text("Saved automatically · timestamps preserved") })
                         } else if(segment.text.isBlank()) {
                             Text("No transcript",style=MaterialTheme.typography.bodyLarge,color=MaterialTheme.colorScheme.onSurfaceVariant)
-                        } else SelectionContainer {
-                            Text(segment.text, style = MaterialTheme.typography.bodyLarge, lineHeight = 27.sp)
-                        }
+                        } else SelectableTranscriptText(segment.text, onTranslate = onLookup)
                         if (translation?.error != null) {
                             Text(translation.error, color=MaterialTheme.colorScheme.error, style=MaterialTheme.typography.bodySmall)
                             TextButton(onClick=onTranslate) { Text("Retry translation") }
@@ -533,7 +547,7 @@ private fun TranscriptSegmentRow(
                                     Text(TranslationCatalog.name(translation.target), modifier=Modifier.weight(1f), style=MaterialTheme.typography.labelMedium, color=MaterialTheme.colorScheme.primary)
                                     TranslationAttribution()
                                 }
-                                SelectionContainer { Text(translation.text, style=MaterialTheme.typography.bodyLarge, lineHeight=27.sp) }
+                                SelectableTranscriptText(translation.text)
                             }
                         }
 
