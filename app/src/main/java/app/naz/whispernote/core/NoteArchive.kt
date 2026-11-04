@@ -16,11 +16,11 @@ object NoteArchive {
     fun write(context: Context, note: Note, output: OutputStream) {
         require(note.audio.isNotBlank()) { "The audio is not available yet." }
         val manifest = JSONObject().apply {
-            put("format", "WhisperNote"); put("version", 1); put("title", note.title)
+            put("extras", extrasJson(note)); put("format", "WhisperNote"); put("version", 1); put("title", note.title)
             put("duration", note.duration); put("created", note.created); put("modified", note.modified)
-            put("language", note.language); put("model", note.model); put("label", note.label)
-            put("status", if(note.busy) "Interrupted" else note.status); put("checkpointMs", note.checkpointMs)
-            put("segments", JSONArray().apply { note.segments.forEach { s -> put(JSONObject().put("start",s.start).put("end",s.end).put("text",s.text)) } })
+            put("language", note.language); put("model", note.model); put("labels", JSONArray(note.labels.toList())); put("label", note.labels.firstOrNull())
+            put("status", if(note.busy || note.status=="Paused") "Interrupted" else note.status); put("checkpointMs", note.checkpointMs)
+            put("segments", JSONArray().apply { note.segments.forEach { s -> put(JSONObject().put("id",s.id).put("start",s.start).put("end",s.end).put("text",s.text)) } })
         }.toString().toByteArray(Charsets.UTF_8)
         require(manifest.size <= MAX_METADATA) { "This transcript is too large to export." }
         ZipOutputStream(output).use { zip ->
@@ -53,19 +53,21 @@ object NoteArchive {
             require(j.getString("format")=="WhisperNote" && j.getInt("version")==1) { "Unsupported WhisperNote file version." }
             val duration=j.getLong("duration"); val checkpoint=j.getLong("checkpointMs")
             require(duration>=0 && checkpoint in 0..duration) { "Invalid recording duration." }
+            val segmentIds=mutableMapOf<String,String>()
             val segments=j.getJSONArray("segments").let { a -> List(a.length()) { i ->
                 val s=a.getJSONObject(i); val start=s.getLong("start"); val end=s.getLong("end")
                 require(start>=0 && end>=start && end<=duration) { "Invalid segment timestamps." }
-                Segment(start,end,s.getString("text"))
+                Segment(start,end,s.getString("text")).also { segmentIds[s.optString("id")]=it.id }
             } }
             require(segments.zipWithNext().all { (a,b) -> a.start<=b.start }) { "Segments must be in timestamp order." }
             val status=j.getString("status")
             require(status in listOf("Completed","Interrupted","Failed")) { "Invalid transcription state." }
-            val label=if(j.isNull("label")) null else j.getString("label").takeIf { it.isNotBlank() }
-            require(label==null || label.length<=60) { "Invalid label." }
+            val labels=readNoteLabels(j)
             return Note(id=id,title=j.getString("title"),audio=Uri.fromFile(file).toString(),owned=true,
                 duration=duration,created=j.getLong("created"),modified=j.getLong("modified"),language=j.getString("language"),
-                model=j.getString("model"),status=status,checkpointMs=checkpoint,segments=segments,label=label,
+                model=j.getString("model"),status=status,checkpointMs=checkpoint,segments=segments,labels=labels,
+                bookmarks=readBookmarks(j.optJSONObject("extras") ?: JSONObject(),duration),
+                translations=readTranslations(j.optJSONObject("extras") ?: JSONObject()).mapNotNull { t -> segmentIds[t.segmentId]?.let { t.copy(segmentId=it) } },
                 error=if(status!="Completed") "Imported partial transcript. Download its model to resume." else null)
         } catch(e: Exception) { file.delete(); throw e }
     }

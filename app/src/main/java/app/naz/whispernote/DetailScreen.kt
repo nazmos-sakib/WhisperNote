@@ -10,6 +10,7 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
@@ -43,6 +44,10 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -120,6 +125,11 @@ fun Detail(n: Note, query: String, vm: NotesViewModel, translationVm: Translatio
     var deleteAudio by remember { mutableStateOf(true) }
     val drafts by vm.retryDrafts.collectAsStateWithLifecycle()
     val draft=drafts[n.id]
+    val modelState by vm.transcription.state.collectAsStateWithLifecycle()
+    var modelSheet by rememberSaveable(n.id) {mutableStateOf(false)}
+    var blockingNoteId by rememberSaveable {mutableStateOf<String?>(null)}
+    val progressChange by PlaybackPositions.changes.collectAsStateWithLifecycle()
+    val completed=remember(n.id,progressChange) {vm.listeningProgress.progress(n.id).completed}
     var retrySegmentId by rememberSaveable(n.id) { mutableStateOf<String?>(null) }
     val labels by vm.labels.collectAsStateWithLifecycle()
     var choosingLabel by remember { mutableStateOf(false) }
@@ -136,6 +146,11 @@ fun Detail(n: Note, query: String, vm: NotesViewModel, translationVm: Translatio
 
     TranscriptDetailContent(
         n = n, query = query, playback = playback,
+        onBookmark = { position, comment -> vm.bookmark(n.id,position,comment) },
+        onRemoveBookmark = {vm.removeBookmark(n.id,it)},
+        onSaveTranslations = {vm.saveTranslations(n.id,translations.results)},
+        onPause = {ProcessingService.control(context,n.id,"pause")},
+        onProcessNext = {ProcessingService.control(context,n.id,"next")},
         onTitleChange = { vm.title(n.id, it) },
         onSegmentChange = { id, text -> translationSession.invalidate(id); vm.segment(n.id, id, text) },
         onClearSegment = { translationSession.invalidate(it); vm.clearSegment(n.id, it) },
@@ -146,7 +161,14 @@ fun Detail(n: Note, query: String, vm: NotesViewModel, translationVm: Translatio
         },
         onRetry = { vm.start(n.id) }, onExport = { export = true },
         onDeleteNote = { deleting = true }, onBack = back, onLabel = { choosingLabel=true }, onSpeed = { idleSpeed=it; if(listening?.noteId==n.id) player.speed(n, it) },
-        onRetranscribe={retrySegmentId=it}, retryStatus=draft?.status,
+        onRetranscribe={ id ->
+            val blocking=drafts.values.firstOrNull {it.busy || it.status=="Ready"}
+            if(blocking!=null && blocking.noteId!=n.id) blockingNoteId=blocking.noteId
+            else retrySegmentId=draft?.original?.id ?: id
+        }, retryStatus=draft?.status,
+        modelState=if(draft?.busy==true) modelState.copy(operation="${draft.status}…") else modelState,
+        onModel={if(draft!=null) retrySegmentId=draft.original.id else modelSheet=true},
+        completed=completed, onCompleted={vm.markCompleted(n.id,!completed)},
         onReviewRetry={retrySegmentId=draft?.original?.id},
         translations = translations,
         onTranslator = { pendingTranslationId = null; translatorSheet = true },
@@ -164,11 +186,20 @@ fun Detail(n: Note, query: String, vm: NotesViewModel, translationVm: Translatio
             else translationSession.request(segment.id, segment.text)
         }
     )
+    if(modelSheet) TranscriptionModelSheet(vm) {modelSheet=false}
+    blockingNoteId?.let { id ->
+        AlertDialog(onDismissRequest={blockingNoteId=null},title={Text("Review the current re-transcription")},
+            text={Text("Another note has a re-transcription running or a suggestion waiting for review.")},
+            confirmButton={TextButton(onClick={
+                context.startActivity(Intent(context,MainActivity::class.java).putExtra("noteId",id).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP))
+                blockingNoteId=null
+            }) {Text("Open note")}},dismissButton={TextButton(onClick={blockingNoteId=null}) {Text("Close")}})
+    }
     if(retrySegmentId!=null) {
         val target=n.segments.firstOrNull {it.id==retrySegmentId}
         if(draft!=null || target!=null) SegmentRetryDialog(n,target,draft,vm,{retrySegmentId=null})
     }
-    if(choosingLabel) LabelPicker(labels,n.label,{vm.assignLabel(n.id,it)},vm::createLabel,{choosingLabel=false})
+    if(choosingLabel) LabelPicker(labels,n.labels,{label,selected -> vm.setLabel(n.id,label,selected)},{vm.clearLabels(n.id)},vm::createLabel,{choosingLabel=false})
     if (deleting) AlertDialog(
         onDismissRequest = { deleting = false }, title = { Text("Delete this note?") },
         text = { Column {
@@ -196,13 +227,13 @@ fun Detail(n: Note, query: String, vm: NotesViewModel, translationVm: Translatio
                 },enabled=n.audio.isNotBlank()) {Text("Share")}
             }
             HorizontalDivider()
-            listOf("txt", "md", "srt").forEach { format -> Row(verticalAlignment = Alignment.CenterVertically) {
+            listOf("txt", "md", "srt", "translated").forEach { format -> Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(format.uppercase(), Modifier.weight(1f))
-                TextButton(onClick = { exportFormat = format; save.launch("${safeName(n.title)}.$format"); export = false }) { Text("Save") }
+                TextButton(onClick = { exportFormat = format; save.launch("${safeName(n.title)}.${if(format=="translated") "translations.txt" else format}"); export = false }) { Text("Save") }
                 TextButton(onClick = {
                     scope.launch(Dispatchers.IO) {
                         try {
-                            val file = File(context.cacheDir, "exports").apply { mkdirs() }.resolve("${safeName(n.title)}.$format")
+                            val file = File(context.cacheDir, "exports").apply { mkdirs() }.resolve("${safeName(n.title)}.${if(format=="translated") "translations.txt" else format}")
                             file.writeText(Exporter.render(n, format))
                             val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", file)
                             val intent = Intent(Intent.ACTION_SEND).setType(if (format == "srt") "application/x-subrip" else "text/plain")
@@ -238,12 +269,29 @@ internal fun TranscriptDetailContent(
     onRetranscribe: (String) -> Unit = {},
     retryStatus: String? = null,
     onReviewRetry: () -> Unit = {},
+    modelState: TranscriptionState = TranscriptionState(),
+    onModel: () -> Unit = {},
+    completed: Boolean = false,
+    onCompleted: () -> Unit = {},
     translations: TranslationSessionState = TranslationSessionState(),
     onTranslator: () -> Unit = {},
     onLookup: (String) -> Unit = {},
-    onTranslate: (Segment) -> Unit = {}
+    onTranslate: (Segment) -> Unit = {},
+    onBookmark: (Long,String) -> Unit = {_,_ ->},
+    onRemoveBookmark: (String) -> Unit = {},
+    onSaveTranslations: () -> Unit = {},
+    onPause: () -> Unit = {},
+    onProcessNext: () -> Unit = {}
 ) {
+    var search by rememberSaveable(n.id) { mutableStateOf(query) }
+    var searchOpen by rememberSaveable(n.id) {mutableStateOf(query.isNotBlank())}
+    var matchIndex by rememberSaveable(n.id) {mutableIntStateOf(0)}
+    val matches=remember(n.segments,search) {if(search.isBlank()) emptyList() else n.segments.mapIndexedNotNull {i,s -> if(s.text.contains(search,true)) i else null}}
+    var bookmarksOpen by rememberSaveable(n.id) {mutableStateOf(false)}
+    var bookmarkComment by rememberSaveable(n.id) {mutableStateOf("")}
+    val estimate by ProcessingQueue.active.collectAsStateWithLifecycle()
     var title by rememberSaveable(n.id) { mutableStateOf(n.title) }
+    var actionsExpanded by rememberSaveable(n.id) { mutableStateOf(false) }
     var editingId by rememberSaveable(n.id) { mutableStateOf<String?>(null) }
     var deletingId by rememberSaveable(n.id) { mutableStateOf<String?>(null) }
     var follow by rememberSaveable(n.id) { mutableStateOf(false) }
@@ -288,30 +336,82 @@ internal fun TranscriptDetailContent(
         snapshotFlow { list.firstVisibleItemIndex == 0 && list.firstVisibleItemScrollOffset == 0 }
             .collect { atTop -> if(!follow && atTop) reserveCenterSpace=false }
     }
-    LaunchedEffect(n.id, query) {
-        if (query.isNotBlank()) {
-            val match = n.segments.indexOfFirst { it.text.contains(query, ignoreCase = true) }
-            if (match >= 0) list.scrollToItem(match + 2)
-        }
+    LaunchedEffect(search) { matchIndex=0 }
+    LaunchedEffect(search,matchIndex,matches) {
+        matches.getOrNull(matchIndex.coerceIn(0,(matches.size-1).coerceAtLeast(0)))?.let {follow=false;list.scrollToItem(it+2)}
     }
     val metadata=remember(n.created,n.model,n.language) {
         "${DateFormat.getDateInstance().format(Date(n.created))} · ${ModelCatalog.models.firstOrNull { it.id == n.model }?.displayName ?: n.model} · ${n.language.ifBlank { "Auto language" }}"
     }
     val centerSpace = with(LocalDensity.current) { (viewportHeight / 2).toDp() }
-    Scaffold(topBar = {
-        TopAppBar(
-            title = { Text("Audio note") },
-            navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") } },
-            actions = {
-                IconButton(onClick=onTranslator, modifier=Modifier.testTag("translation-toolbar")) {
-                    Icon(Icons.Outlined.Translate, translations.active?.let { "Translator active: ${it.label}" } ?: "Choose translator",
-                        tint=if(translations.active!=null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+    val scrollScope=rememberCoroutineScope()
+    val showTop by remember(list) {derivedStateOf {list.firstVisibleItemIndex>=5 || list.firstVisibleItemScrollOffset > maxOf(1200,list.layoutInfo.viewportSize.height*2)}}
+    Scaffold(floatingActionButton={
+        if(showTop) SmallFloatingActionButton(onClick={follow=false;editingId=null;scrollScope.launch {list.animateScrollToItem(0)}}) {
+            Icon(Icons.Outlined.KeyboardArrowUp,"Scroll to top")
+        }
+    }, topBar = {
+        Surface(color=MaterialTheme.colorScheme.surface) {
+            Column {
+                TopAppBar(
+                    // Nested icon buttons consume their own taps; they never toggle this row.
+                    modifier=Modifier.clickable(
+                        role=Role.Button,
+                        onClickLabel=if(actionsExpanded) "Hide note actions" else "Show note actions"
+                    ) { actionsExpanded=!actionsExpanded }
+                        .semantics { stateDescription=if(actionsExpanded) "Expanded" else "Collapsed" },
+                    title = {
+                        BoxWithConstraints(Modifier.fillMaxWidth()) {
+                            // Reserve both 48dp touch targets so a status change never shifts the title.
+                            val titleWidth=minOf(maxWidth*0.65f, (maxWidth-96.dp).coerceAtLeast(0.dp))
+                            Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
+                                Text(title.ifBlank { "Untitled note" },
+                                    modifier=Modifier.width(titleWidth).testTag("detail-toolbar-title"),
+                                    maxLines=1,softWrap=false,overflow=TextOverflow.Ellipsis)
+                                Spacer(Modifier.weight(1f))
+                                Box(Modifier.size(48.dp),contentAlignment=Alignment.Center) {
+                                    if(retryStatus=="Ready" || modelState.operation!=null) {
+                                        IconButton(onClick=onModel,modifier=Modifier.testTag("detail-model-status")) {
+                                            if(retryStatus=="Ready") Icon(Icons.Outlined.Check,"Review re-transcription suggestion",
+                                                tint=MaterialTheme.colorScheme.primary)
+                                            else CircularProgressIndicator(
+                                                modifier=Modifier.size(24.dp).semantics {
+                                                    contentDescription=modelState.operation ?: "Model operation in progress"
+                                                },strokeWidth=2.dp)
+                                        }
+                                    }
+                                }
+                                IconButton(onClick={actionsExpanded=!actionsExpanded}) {
+                                    Icon(if(actionsExpanded) Icons.Outlined.KeyboardArrowUp else Icons.Outlined.KeyboardArrowDown,
+                                        if(actionsExpanded) "Hide note actions" else "Show note actions")
+                                }
+                            }
+                        }
+                    },
+                    navigationIcon = { IconButton(onClick=onBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack,"Back") } }
+                )
+                AnimatedVisibility(visible=actionsExpanded,
+                    enter=expandVertically(tween(180))+fadeIn(tween(180)),
+                    exit=shrinkVertically(tween(180))+fadeOut(tween(180))) {
+                    Row(Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
+                        .padding(horizontal=12.dp).padding(bottom=4.dp).testTag("detail-toolbar-actions"),
+                        horizontalArrangement=Arrangement.SpaceEvenly,verticalAlignment=Alignment.CenterVertically) {
+                        IconButton(onClick=onModel) {
+                            Icon(Icons.Outlined.Memory,
+                                if(modelState.model!=null) "Transcription model ready" else "Choose transcription model",
+                                tint=if(modelState.model!=null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        IconButton(onClick=onTranslator,modifier=Modifier.testTag("translation-toolbar")) {
+                            Icon(Icons.Outlined.Translate,translations.active?.let { "Translator active: ${it.label}" } ?: "Choose translator",
+                                tint=if(translations.active!=null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        IconButton(onClick=onLabel) {Icon(Icons.AutoMirrored.Outlined.Label,"Change label")}
+                        IconButton(onClick=onExport,enabled=n.segments.isNotEmpty() || n.audio.isNotBlank()) {Icon(Icons.Outlined.IosShare,"Export")}
+                        IconButton(onClick=onDeleteNote,enabled=!n.busy) {Icon(Icons.Outlined.DeleteOutline,"Delete note")}
+                    }
                 }
-                IconButton(onClick=onLabel) {Icon(Icons.AutoMirrored.Outlined.Label,"Change label")}
-                IconButton(onClick = onExport, enabled = n.segments.isNotEmpty() || n.audio.isNotBlank()) { Icon(Icons.Outlined.IosShare, "Export") }
-                IconButton(onClick = onDeleteNote, enabled = !n.busy) { Icon(Icons.Outlined.DeleteOutline, "Delete note") }
             }
-        )
+        }
     }) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).imePadding()) {
             AnimatedVisibility(
@@ -323,7 +423,10 @@ internal fun TranscriptDetailContent(
                     BasicTextField(title, { title = it; onTitleChange(it) }, Modifier.fillMaxWidth(),
                         textStyle = MaterialTheme.typography.headlineMedium.copy(color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold),
                         decorationBox = { inner -> if (title.isEmpty()) Text("Untitled note", style = MaterialTheme.typography.headlineMedium); inner() })
-                    TextButton(onClick=onLabel) {Text(n.label ?: "Add label")}
+                    Row {
+                        TextButton(onClick=onLabel,modifier=Modifier.weight(1f,fill=false)) {Text(n.labels.joinToString(" · ").ifBlank {"Add labels"},maxLines=2,overflow=TextOverflow.Ellipsis)}
+                        TextButton(onClick=onCompleted) {Text(if(completed) "Mark uncompleted" else "Mark completed")}
+                    }
                     Spacer(Modifier.height(8.dp))
                     Text(metadata,
                         style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -336,6 +439,17 @@ internal fun TranscriptDetailContent(
                 onToggle = onTogglePlayback, onSeek = onSeek, onSpeed = onSpeed, onScrub = { follow = false },
                 modifier = Modifier.padding(horizontal = 20.dp).padding(bottom = 8.dp)
             )
+            Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceEvenly) {
+                TextButton(onClick={searchOpen=!searchOpen}) {Text("Find")}
+                TextButton(onClick={bookmarksOpen=true}) {Text("Bookmarks (${n.bookmarks.size})")}
+                if(translations.results.values.any {it.text!=null && !it.pending}) TextButton(onClick=onSaveTranslations) {Text("Save translations")}
+            }
+            if(searchOpen) Row(Modifier.padding(horizontal=16.dp),verticalAlignment=Alignment.CenterVertically) {
+                OutlinedTextField(search,{search=it},Modifier.weight(1f),singleLine=true,label={Text("Find in transcript")})
+                Text("${if(matches.isEmpty()) 0 else matchIndex.coerceAtMost(matches.lastIndex)+1}/${matches.size}",Modifier.padding(4.dp))
+                IconButton(onClick={matchIndex=(matchIndex-1+matches.size)%matches.size},enabled=matches.isNotEmpty()) {Icon(Icons.Outlined.KeyboardArrowUp,"Previous matching segment")}
+                IconButton(onClick={matchIndex=(matchIndex+1)%matches.size},enabled=matches.isNotEmpty()) {Icon(Icons.Outlined.KeyboardArrowDown,"Next matching segment")}
+            }
             LazyColumn(
                 state = list,
                 modifier = Modifier.weight(1f).fillMaxWidth().testTag("transcript-list")
@@ -349,7 +463,7 @@ internal fun TranscriptDetailContent(
                             waitForUpOrCancellation(pass = PointerEventPass.Initial)
                         }
                     },
-                contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 12.dp, bottom = if (reserveCenterSpace) centerSpace else 20.dp),
+                contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 12.dp, bottom = if (reserveCenterSpace) maxOf(centerSpace,80.dp) else 80.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 item(key = "transcript-header") {
@@ -358,12 +472,18 @@ internal fun TranscriptDetailContent(
                         if (n.busy) {
                             Text("${n.status} ${if (n.progress > 0) "${n.progress}%" else "…"}")
                             LinearProgressIndicator(Modifier.fillMaxWidth())
+                            estimate?.takeIf {it.id==n.id}?.remainingMs?.let {Text("About ${(it/60000).coerceAtLeast(1)} min remaining · estimate")}
+                            Row {
+                                TextButton(onClick=onPause) {Text("Pause transcription")}
+                                if(n.status=="Queued") TextButton(onClick=onProcessNext) {Text("Process next")}
+                            }
                             Text(if (n.checkpointMs > 0) "Text saved through ${timestamp(n.checkpointMs)}. New segments appear below as they finish." else "You can leave this screen. Text appears below as segments finish.", style = MaterialTheme.typography.bodySmall)
                         }
                         if (n.resumable) {
                             Text("Transcription incomplete", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.error)
                             Text(if (n.checkpointMs > 0) "Saved through ${timestamp(n.checkpointMs)} of ${timestamp(n.duration)}. Resume keeps this text and continues from that timestamp." else "Your audio is saved. Retry to transcribe it.")
                             n.error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                            TextButton(onClick=onProcessNext) {Text("Process next")}
                             Button(onClick = onRetry) { Text(if (n.checkpointMs > 0) "Resume from ${timestamp(n.checkpointMs)}" else "Retry transcription") }
                         }
                         if (n.status == "Completed" && n.segments.isEmpty()) Text("No transcript segments. Your audio is still available.")
@@ -375,6 +495,7 @@ internal fun TranscriptDetailContent(
                 }
                 item(key = "centering-space") { Spacer(Modifier.height(if (reserveCenterSpace) centerSpace else 0.dp)) }
                 itemsIndexed(n.segments, key = { _, segment -> segment.id }) { _, segment ->
+                    Column {
                     TranscriptSegmentRow(
                         segment=segment, active=segment.id==activeId,
                         playing=segment.id==activeId && playback.playing, ready=playback.ready,
@@ -392,10 +513,24 @@ internal fun TranscriptDetailContent(
                         onTranslate={follow=false;onTranslate(segment)},
                         onLookup={follow=false;onLookup(it)}
                     )
+                    n.translations.filter {it.segmentId==segment.id && it.source==segment.text}.forEach { saved ->
+                        Text("Saved · ${saved.target.uppercase()}: ${saved.text}",style=MaterialTheme.typography.bodyMedium,modifier=Modifier.padding(12.dp))
+                    }
+                    }
                 }
             }
         }
     }
+    if(bookmarksOpen) AlertDialog(onDismissRequest={bookmarksOpen=false},title={Text("Bookmarks")},
+        text={Column(Modifier.verticalScroll(rememberScrollState())) {
+            Text("Current position: ${timestamp(playback.position)}")
+            OutlinedTextField(bookmarkComment,{bookmarkComment=it},label={Text("Comment (optional)")})
+            TextButton(onClick={onBookmark(playback.position,bookmarkComment);bookmarkComment=""},enabled=n.duration>0) {Text("Bookmark this moment")}
+            n.bookmarks.sortedBy {it.position}.forEach { b -> Row(verticalAlignment=Alignment.CenterVertically) {
+                TextButton(onClick={onSeek(b.position,true);bookmarksOpen=false},modifier=Modifier.weight(1f)) {Text("${timestamp(b.position)} ${b.comment}")}
+                IconButton(onClick={onRemoveBookmark(b.id)}) {Icon(Icons.Outlined.DeleteOutline,"Remove bookmark")}
+            } }
+        }},confirmButton={TextButton(onClick={bookmarksOpen=false}) {Text("Close")}})
     remember(n.segments,deletingId) { if(deletingId==null) null else n.segments.firstOrNull { it.id == deletingId } }?.let { segment ->
         AlertDialog(
             onDismissRequest = { deletingId = null }, title = { Text("Clear this text?") },

@@ -39,9 +39,11 @@ import kotlinx.coroutines.launch
 class MainActivity: ComponentActivity() {
     private val opened= kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
     private val openGeneration= kotlinx.coroutines.flow.MutableStateFlow(0L)
+    private val incomingMime=kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
     private val incoming= kotlinx.coroutines.flow.MutableStateFlow<Uri?>(null)
     @Suppress("DEPRECATION")
     private fun receive(intent: Intent) {
+        incomingMime.value=intent.type
         opened.value=intent.getStringExtra("noteId")
         if (opened.value != null) openGeneration.value++
         incoming.value=when(intent.action) {
@@ -52,12 +54,13 @@ class MainActivity: ComponentActivity() {
     }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState); receive(intent);
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) //keep the screen always on
+        applyKeepAwake()
         enableEdgeToEdge()
         setContent { WhisperNoteTheme {
             val id by opened.collectAsState(); val uri by incoming.collectAsState()
             val generation by openGeneration.collectAsState()
-            WhisperNote(id,openRequest=generation,incoming=uri,consumeIncoming={incoming.value=null;setIntent(Intent(this,MainActivity::class.java))})
+            val mime by incomingMime.collectAsState()
+            WhisperNote(id,openRequest=generation,incoming=uri,incomingMime=mime,consumeIncoming={incoming.value=null;setIntent(Intent(this,MainActivity::class.java))})
         } }
     }
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); receive(intent) }
@@ -67,11 +70,15 @@ class MainActivity: ComponentActivity() {
     }
     override fun onResume() {
         super.onResume()
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        applyKeepAwake()
     }
     override fun onStop() {
         super.onStop()
         if (!isChangingConfigurations) androidx.lifecycle.ViewModelProvider(this)[TranslationViewModel::class.java].onBackground()
+    }
+    fun applyKeepAwake() {
+        if(getSharedPreferences("display",MODE_PRIVATE).getBoolean("keep-awake",false)) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
     override fun onPause() {
         super.onPause()
@@ -79,7 +86,7 @@ class MainActivity: ComponentActivity() {
     }
 }
 @OptIn(ExperimentalMaterial3Api::class)
-@Composable fun WhisperNote(opened: String?,vm: NotesViewModel=viewModel(), incoming: Uri? = null, consumeIncoming: () -> Unit = {}, openRequest: Long = 0) {
+@Composable fun WhisperNote(opened: String?,vm: NotesViewModel=viewModel(), incoming: Uri? = null, consumeIncoming: () -> Unit = {}, openRequest: Long = 0, incomingMime: String? = null) {
     val translationVm: TranslationViewModel = viewModel()
     var translationModels by remember { mutableStateOf(false) }
     var informationPage by rememberSaveable { mutableStateOf<String?>(null) }
@@ -104,6 +111,14 @@ class MainActivity: ComponentActivity() {
     val playbackController = (context.applicationContext as WhisperApp).playback
     val listening by playbackController.state.collectAsStateWithLifecycle()
     val picker=rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { it?.let { vm.import(it,model,labelFilter?.takeIf { it.isNotEmpty() }) }; importing=false }
+    val backupSave=rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) {it?.let {vm.libraryBackup(it,false)}}
+    val backupOpen=rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) {it?.let {vm.libraryBackup(it,true)}}
+    val recording by RecordingService.state.collectAsStateWithLifecycle()
+    val recordingError by RecordingService.error.collectAsStateWithLifecycle()
+    val micPermission=rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if(granted) runCatching {RecordingService.start(context,model,labelFilter?.takeIf {it.isNotEmpty()})}.onFailure {vm.error.value=it.message}
+        else vm.error.value="Microphone permission is needed to record audio."
+    }
     val archivePicker=rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { it?.let(vm::importArchive) }
     val permission=rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
     LaunchedEffect(opened,openRequest) { if(opened!=null) selected=opened }
@@ -118,11 +133,11 @@ class MainActivity: ComponentActivity() {
             Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(12.dp)) {
                 Text("WhisperNote",style=MaterialTheme.typography.headlineSmall,modifier=Modifier.padding(16.dp))
                 NavigationDrawerItem(label={Text("All notes · ${notes.size}")},selected=labelFilter==null,onClick={labelFilter=null;scope.launch {drawer.close()}},icon={Icon(Icons.AutoMirrored.Outlined.Notes,null)})
-                NavigationDrawerItem(label={Text("Unlabelled · ${notes.count { it.label==null }}")},selected=labelFilter=="",onClick={labelFilter="";scope.launch {drawer.close()}},icon={Icon(Icons.AutoMirrored.Outlined.LabelOff,null)})
+                NavigationDrawerItem(label={Text("Unlabelled · ${notes.count { it.labels.isEmpty() }}")},selected=labelFilter=="",onClick={labelFilter="";scope.launch {drawer.close()}},icon={Icon(Icons.AutoMirrored.Outlined.LabelOff,null)})
                 HorizontalDivider(Modifier.padding(vertical=12.dp))
                 Text("LABELS",modifier=Modifier.padding(16.dp),style=MaterialTheme.typography.labelMedium)
                 labels.forEach { label ->
-                    NavigationDrawerItem(label={Text("$label · ${notes.count {it.label==label}}")},selected=labelFilter==label,onClick={labelFilter=label;scope.launch {drawer.close()}},icon={Icon(Icons.AutoMirrored.Outlined.Label,null)},badge={
+                    NavigationDrawerItem(label={Text("$label · ${notes.count {label in it.labels}}")},selected=labelFilter==label,onClick={labelFilter=label;scope.launch {drawer.close()}},icon={Icon(Icons.AutoMirrored.Outlined.Label,null)},badge={
                         var menu by remember { mutableStateOf(false) }
                         Box { IconButton(onClick={menu=true}) {Icon(Icons.Outlined.MoreVert,"Manage $label")}
                             DropdownMenu(menu,{menu=false}) {
@@ -134,8 +149,15 @@ class MainActivity: ComponentActivity() {
                 }
                 NavigationDrawerItem(label={Text("Create label")},selected=false,onClick={createLabel=true},icon={Icon(Icons.Outlined.Add,null)})
                 HorizontalDivider(Modifier.padding(vertical=12.dp))
+                var keepAwake by remember {mutableStateOf(context.getSharedPreferences("display",android.content.Context.MODE_PRIVATE).getBoolean("keep-awake",false))}
+                Row(verticalAlignment=Alignment.CenterVertically) {
+                    Switch(keepAwake,{keepAwake=it;context.getSharedPreferences("display",android.content.Context.MODE_PRIVATE).edit().putBoolean("keep-awake",it).apply();(context as? MainActivity)?.applyKeepAwake()})
+                    Text("Keep screen awake")
+                }
                 NavigationDrawerItem(label={Text("Translation models")},selected=false,onClick={scope.launch {drawer.close();translationModels=true}},icon={Icon(Icons.Outlined.Translate,null)})
                 NavigationDrawerItem(label={Text("Models")},selected=false,onClick={scope.launch {drawer.close();modelSheet=true}},icon={Icon(Icons.Outlined.Memory,null)})
+                NavigationDrawerItem(label={Text("Back up library")},selected=false,onClick={if(transfer==null) backupSave.launch("WhisperNote-library.zip")})
+                NavigationDrawerItem(label={Text("Restore library")},selected=false,onClick={if(transfer==null) backupOpen.launch(arrayOf("application/zip","application/octet-stream"))})
                 NavigationDrawerItem(label={Text("Import complete note")},selected=false,onClick={if(transfer==null) {scope.launch {drawer.close()};archivePicker.launch(arrayOf("*/*"))}},icon={Icon(Icons.Outlined.FileOpen,null)})
             }
             HorizontalDivider()
@@ -156,11 +178,16 @@ class MainActivity: ComponentActivity() {
         } },
         floatingActionButton={ ExtendedFloatingActionButton(onClick={importing=true},icon={Icon(Icons.Outlined.Add,null)},text={Text("New transcription")}) }
     ) { padding -> Column(Modifier.fillMaxSize().padding(padding).padding(horizontal=20.dp)) {
+        recording?.let { status -> Row(verticalAlignment=Alignment.CenterVertically) {
+            Text(status,Modifier.weight(1f))
+            TextButton(onClick={RecordingService.command(context,if(status=="Paused") "resume" else "pause")}) {Text(if(status=="Paused") "Resume" else "Pause")}
+            TextButton(onClick={RecordingService.command(context,"stop")}) {Text("Stop & save")}
+        } }
         Text("A little space for every spoken thought.",style=MaterialTheme.typography.bodyLarge,color=MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(20.dp))
         OutlinedTextField(query,{query=it},Modifier.fillMaxWidth(),placeholder={Text("Search your notes")},leadingIcon={Icon(Icons.Outlined.Search,null)},singleLine=true,shape=RoundedCornerShape(28.dp))
         Spacer(Modifier.height(20.dp))
-        val filtered=notes.filter { (labelFilter==null || if(labelFilter=="") it.label==null else it.label==labelFilter) }.filter { query.isBlank() || it.title.contains(query,true) || it.segments.any { s -> s.text.contains(query,true) } }
+        val filtered=notes.filter { (labelFilter==null || if(labelFilter=="") it.labels.isEmpty() else labelFilter in it.labels) }.filter { query.isBlank() || it.title.contains(query,true) || it.segments.any { s -> s.text.contains(query,true) } }
         Text(if(query.isBlank()) "YOUR LIBRARY · ${filtered.size}" else "${filtered.size} RESULTS",style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(12.dp))
         if(filtered.isEmpty()) Box(Modifier.fillMaxSize().padding(bottom=100.dp),contentAlignment=Alignment.Center) { Column(horizontalAlignment=Alignment.CenterHorizontally) {
@@ -175,6 +202,7 @@ class MainActivity: ComponentActivity() {
     if(importing) ModalBottomSheet(onDismissRequest={importing=false}) { Column(Modifier.verticalScroll(rememberScrollState()).padding(24.dp).imePadding().navigationBarsPadding(),verticalArrangement=Arrangement.spacedBy(16.dp)) {
         Text("Turn audio into a note",style=MaterialTheme.typography.headlineSmall)
         Text("Your audio stays on this device. Download a multilingual model once, then transcribe offline.",color=MaterialTheme.colorScheme.onSurfaceVariant)
+        OutlinedButton(onClick={importing=false;micPermission.launch(android.Manifest.permission.RECORD_AUDIO)},enabled=recording==null,modifier=Modifier.fillMaxWidth()) {Text("Record audio")}
         ModelPicker(model) { model=it; vm.models.preferredModel=it }
         if(!vm.models.ready(model)) Text("Download ${ModelCatalog.get(model).displayName} in Models before transcription.",color=MaterialTheme.colorScheme.primary)
         Button(onClick={if(android.os.Build.VERSION.SDK_INT>=33) permission.launch(android.Manifest.permission.POST_NOTIFICATIONS); picker.launch(arrayOf("audio/*","video/mp4","application/ogg"))},Modifier.fillMaxWidth()) { Icon(Icons.Outlined.AudioFile,null); Spacer(Modifier.width(8.dp)); Text("Choose audio file") }
@@ -183,28 +211,44 @@ class MainActivity: ComponentActivity() {
         OutlinedTextField(url,{url=it},Modifier.fillMaxWidth(),label={Text("Direct HTTPS audio URL")},singleLine=true)
         OutlinedButton(onClick={vm.importUrl(url.trim(),model,labelFilter?.takeIf {it.isNotEmpty()}); importing=false; url=""},enabled=url.isNotBlank(),modifier=Modifier.fillMaxWidth()) { Text("Download audio") }
     } }
-    if(incoming!=null) AlertDialog(onDismissRequest=consumeIncoming,title={Text("Import complete note?")},text={Text("Add a local copy of the audio, transcript and label to your library. Existing notes will stay as they are.")},confirmButton={TextButton(onClick={vm.importArchive(incoming);consumeIncoming()},enabled=transfer==null) {Text("Import")}},dismissButton={TextButton(onClick=consumeIncoming) {Text("Cancel")}})
+    if(incoming!=null) {
+        val incomingType=remember(incoming,incomingMime) {incomingMime ?: runCatching {context.contentResolver.getType(incoming)}.getOrNull().orEmpty()}
+        val isAudio=incomingType.startsWith("audio/") || incomingType=="video/mp4" || incomingType=="application/ogg"
+        AlertDialog(onDismissRequest=consumeIncoming,title={Text(if(isAudio) "Transcribe shared audio?" else "Import complete note?")},
+            text={Column {Text(if(isAudio) "Save a local audio note and add it to the transcription queue." else "Add a copy of this complete note to your library."); if(isAudio) ModelPicker(model) {model=it;vm.models.preferredModel=it}}},
+            confirmButton={TextButton(onClick={if(isAudio) vm.import(incoming,model,labelFilter?.takeIf {it.isNotEmpty()}) else vm.importArchive(incoming);consumeIncoming()},enabled=transfer==null) {Text("Import")}},dismissButton={TextButton(onClick=consumeIncoming) {Text("Cancel")}})
+    }
+    recordingError?.let {message -> AlertDialog(onDismissRequest={RecordingService.error.value=null},title={Text("Recording")},text={Text(message)},confirmButton={TextButton(onClick={RecordingService.error.value=null}) {Text("OK")}})}
+
     if(createLabel) LabelNameDialog(null,{vm.createLabel(it);createLabel=false},{createLabel=false})
     renameLabel?.let { old -> LabelNameDialog(old,{vm.renameLabel(old,it); if(labelFilter==old) labelFilter=it;renameLabel=null},{renameLabel=null}) }
-    deleteLabel?.let { label -> AlertDialog(onDismissRequest={deleteLabel=null},title={Text("Delete label?")},text={Text("Notes in “$label” will become unlabelled. No notes or audio will be deleted.")},confirmButton={TextButton(onClick={vm.deleteLabel(label);deleteLabel=null}) {Text("Delete label")}},dismissButton={TextButton(onClick={deleteLabel=null}) {Text("Cancel")}}) }
+    deleteLabel?.let { label -> AlertDialog(onDismissRequest={deleteLabel=null},title={Text("Delete label?")},text={Text("Remove “$label” from all notes? Their other labels, text, and audio will be kept.")},confirmButton={TextButton(onClick={vm.deleteLabel(label);deleteLabel=null}) {Text("Delete label")}},dismissButton={TextButton(onClick={deleteLabel=null}) {Text("Cancel")}}) }
     if(transfer!=null) AlertDialog(onDismissRequest={},title={Text(transfer!!)},text={Column {LinearProgressIndicator(Modifier.fillMaxWidth());Text("Large audio files can take a little while.")}},confirmButton={})
     if(translationModels) TranslationModelsSheet(translationVm) { translationModels=false }
     if(modelSheet) ModalBottomSheet(onDismissRequest={modelSheet=false}) { Models(vm) }
     if(error!=null) AlertDialog(onDismissRequest={vm.error.value=null},title={Text("Something went wrong")},text={Text(error!!)},confirmButton={TextButton(onClick={vm.error.value=null}) {Text("OK")}})
 }
 @Composable fun NoteCard(n: Note,onClick:()->Unit) {
+    val progressChange by PlaybackPositions.changes.collectAsStateWithLifecycle()
+    val context=LocalContext.current
+    val progress=remember(n.id,progressChange) {PlaybackPositions(context).progress(n.id)}
     val colors=listOf(MaterialTheme.colorScheme.secondaryContainer,MaterialTheme.colorScheme.tertiaryContainer,MaterialTheme.colorScheme.surfaceContainerHigh)
     Card(onClick=onClick,shape=RoundedCornerShape(20.dp),colors=CardDefaults.cardColors(containerColor=colors[(n.id.hashCode() and Int.MAX_VALUE)%colors.size]),modifier=Modifier.fillMaxWidth().heightIn(min=175.dp,max=360.dp)) {
         Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
             Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
                 Icon(Icons.Outlined.GraphicEq,null,tint=MaterialTheme.colorScheme.primary,modifier=Modifier.size(22.dp))
                 Box(Modifier.weight(1f).padding(start=8.dp),contentAlignment=Alignment.CenterEnd) {
-                    n.label?.takeIf { it.isNotBlank() }?.let { label ->
-                        Text(label,modifier=Modifier.widthIn(max=120.dp),maxLines=1,softWrap=false,
+                    n.labels.takeIf {it.isNotEmpty()}?.joinToString(" · ")?.let { label ->
+                        Text(label,maxLines=2,
                             overflow=TextOverflow.Ellipsis,textAlign=TextAlign.End,style=MaterialTheme.typography.labelSmall)
                     }
                 }
             }
+            if(progress.completed) Row(verticalAlignment=Alignment.CenterVertically) {
+                Icon(Icons.Outlined.CheckCircle,"Listening completed",Modifier.size(18.dp))
+                Text(" Completed",style=MaterialTheme.typography.labelSmall)
+            } else if(progress.position>0 && n.duration>0) LinearProgressIndicator(
+                progress={ (progress.position.toFloat()/n.duration).coerceIn(0f,1f) }, modifier=Modifier.fillMaxWidth())
             Text(n.title.ifBlank { "Untitled note" },fontWeight=FontWeight.SemiBold,maxLines=2,overflow=TextOverflow.Ellipsis)
             if(n.busy) { Text(n.status+if(n.progress>0) " · ${n.progress}%" else "…",style=MaterialTheme.typography.bodySmall); LinearProgressIndicator(modifier=Modifier.fillMaxWidth()) }
             if(n.resumable) Text(if(n.checkpointMs>0) "Incomplete · saved through ${timestamp(n.checkpointMs)}" else "Incomplete · tap to retry",style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.error)
@@ -218,6 +262,12 @@ class MainActivity: ComponentActivity() {
 @Composable fun ModelPicker(selected: String, onSelect: (String) -> Unit) {
     val model=ModelCatalog.get(selected)
     Column(verticalArrangement=Arrangement.spacedBy(8.dp)) {
+        Row(horizontalArrangement=Arrangement.spacedBy(4.dp)) {
+            listOf("Fast" to "tiny-q5_1","Balanced" to "base-q5_1","Accurate" to "small-q5_1").forEach { (label,id) ->
+                FilterChip(selected==id,{onSelect(id)},label={Text(label)})
+            }
+        }
+        Text("Larger models can take much longer on long recordings. Fast trades accuracy for speed.",style=MaterialTheme.typography.bodySmall)
         Text("Model",style=MaterialTheme.typography.labelLarge)
         Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
             ModelCatalog.families.forEach { family ->
@@ -246,6 +296,16 @@ class MainActivity: ComponentActivity() {
                 else TextButton(onClick={ModelDownloads.error.value=null; ProcessingService.start(context,m.id,true)},enabled=!ready && progress==null) {Text(if(ready) "Ready" else "Download")}
             }
         }
+        HorizontalDivider()
+        Text("Skip silence (optional)",style=MaterialTheme.typography.titleMedium)
+        Text("Speech detection can speed up recordings with long pauses. Quiet speech may be missed; turn this off if needed.",style=MaterialTheme.typography.bodySmall)
+        val vadReady=remember(progress) {vm.models.vadReady}
+        var skipSilence by remember {mutableStateOf(vm.models.skipSilence)}
+        Row(verticalAlignment=Alignment.CenterVertically) {
+            Switch(skipSilence,{skipSilence=it;vm.models.skipSilence=it},enabled=vadReady)
+            Text("Enable for transcription")
+        }
+        if(!vadReady) TextButton(onClick={ProcessingService.start(context,"vad",true)},enabled=progress==null) {Text(if(progress?.first=="vad") "Downloading speech detector…" else "Download speech detector · 0.9 MB")}
         error?.let { Text(it,color=MaterialTheme.colorScheme.error) }
     }
 }

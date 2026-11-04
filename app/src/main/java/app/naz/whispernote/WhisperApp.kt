@@ -9,10 +9,12 @@ class WhisperApp : Application() {
     val repository by lazy { NoteRepository(this) }
     val playback by lazy { app.naz.whispernote.core.PlaybackController(this) }
     val retries by lazy { app.naz.whispernote.core.SegmentRetries(this) }
+    val transcription by lazy { app.naz.whispernote.core.TranscriptionSession(this, scope) }
     val ready = CompletableDeferred<Unit>()
 
     override fun onCreate() {
         super.onCreate()
+        transcription
         scope.launch {
             try {
                 repository.load()

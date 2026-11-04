@@ -19,17 +19,20 @@ data class Note(
     val segments: List<Segment> = emptyList(),
     // Committed with finalized segments, never advanced from an estimated progress percentage.
     val checkpointMs: Long = 0,
-    val label: String? = null
+    val labels: Set<String> = emptySet(),
+    val bookmarks: List<Bookmark> = emptyList(),
+    val translations: List<SavedTranslation> = emptyList()
 ) {
-    val busy get() = status !in listOf("Completed", "Failed", "Interrupted")
-    val resumable get() = status == "Failed" || status == "Interrupted"
+    val busy get() = status !in listOf("Completed", "Failed", "Interrupted", "Paused")
+    val resumable get() = status == "Failed" || status == "Interrupted" || status == "Paused"
     fun appendFinalized(segment: Segment): Note {
         require(segment.start >= checkpointMs && segment.end > segment.start)
         require(duration > 0 && segment.end <= duration)
         return copy(segments = segments + segment, checkpointMs = segment.end)
     }
     fun editSegment(segmentId: String, text: String) = copy(
-        segments = segments.map { if (it.id == segmentId) it.copy(text = text) else it }
+        segments = segments.map { if (it.id == segmentId) it.copy(text = text) else it },
+        translations = translations.filterNot { it.segmentId == segmentId }
     )
     // The checkpoint records processed audio, not the last remaining visible segment.
     fun clearSegment(segmentId: String) = editSegment(segmentId, "")
@@ -72,7 +75,7 @@ class NoteRepository(context: Context, databaseName: String = "notes.db") : SQLi
         db.beginTransaction()
         try {
             db.execSQL("UPDATE labels SET name=? WHERE name=?", arrayOf(name, old))
-            state.value.filter { it.label == old }.forEach { n -> db.execSQL("UPDATE notes SET document=? WHERE id=?", arrayOf(encode(n.copy(label=name)).toString(),n.id)) }
+            state.value.filter { old in it.labels }.forEach { n -> db.execSQL("UPDATE notes SET document=? WHERE id=?", arrayOf(encode(n.copy(labels=n.labels.map {if(it==old) name else it}.toSet())).toString(),n.id)) }
             db.setTransactionSuccessful()
         } finally { db.endTransaction(); load() }
     }
@@ -81,28 +84,41 @@ class NoteRepository(context: Context, databaseName: String = "notes.db") : SQLi
         db.beginTransaction()
         try {
             db.delete("labels","name=?",arrayOf(name))
-            state.value.filter { it.label==name }.forEach { n -> db.execSQL("UPDATE notes SET document=? WHERE id=?",arrayOf(encode(n.copy(label=null)).toString(),n.id)) }
+            state.value.filter { name in it.labels }.forEach { n -> db.execSQL("UPDATE notes SET document=? WHERE id=?",arrayOf(encode(n.copy(labels=n.labels-name)).toString(),n.id)) }
             db.setTransactionSuccessful()
         } finally { db.endTransaction(); load() }
     }
-    @Synchronized fun assignLabel(id: String, label: String?) {
-        require(label == null || label in labelState.value) { "This label no longer exists." }
-        update(id) { it.copy(label=label) }
+    @Synchronized fun setLabel(id: String, label: String, selected: Boolean) {
+        require(label in labelState.value) { "This label no longer exists." }
+        update(id) { it.copy(labels=if(selected) it.labels+label else it.labels-label) }
+    }
+    @Synchronized fun clearLabels(id: String) { update(id) {it.copy(labels=emptySet())} }
+    @Synchronized fun restore(notes: List<Note>, labels: List<String> = emptyList()) {
+        val db=writableDatabase
+        db.beginTransaction()
+        try {
+            (notes.flatMap {it.labels}+labels).distinct().forEach { db.execSQL("INSERT OR IGNORE INTO labels(name) VALUES (?)",arrayOf(it)) }
+            notes.forEach {db.execSQL("INSERT INTO notes VALUES (?, ?)",arrayOf(it.id,encode(it).toString()))}
+            db.setTransactionSuccessful()
+        } finally {db.endTransaction(); load()}
     }
     @Synchronized fun get(id: String) = state.value.firstOrNull { it.id == id }
     @Synchronized fun put(note: Note) {
         writableDatabase.execSQL("INSERT OR REPLACE INTO notes VALUES (?, ?)", arrayOf(note.id, encode(note).toString()))
-        load()
+        state.value = (state.value.filterNot { it.id == note.id } + note).sortedByDescending { it.created }
+    }
+    @Synchronized fun progress(id: String, status: String, progress: Int?) {
+        state.value=state.value.map {if(it.id==id) it.copy(status=status,progress=progress ?: it.progress,error=null) else it}
     }
     @Synchronized fun update(id: String, change: (Note) -> Note) { get(id)?.let { put(change(it).copy(modified = System.currentTimeMillis())) } }
     @Synchronized fun delete(id: String) { writableDatabase.delete("notes", "id=?", arrayOf(id)); load() }
     private fun encode(n: Note) = JSONObject().apply {
-        put("label",n.label); put("id",n.id); put("title",n.title); put("audio",n.audio); put("owned",n.owned); put("source",n.source)
+        put("extras",extrasJson(n)); put("labels",JSONArray(n.labels.toList())); put("label",n.labels.firstOrNull()); put("id",n.id); put("title",n.title); put("audio",n.audio); put("owned",n.owned); put("source",n.source)
         put("duration",n.duration); put("created",n.created); put("modified",n.modified); put("language",n.language)
         put("model",n.model); put("status",n.status); put("progress",n.progress); put("error",n.error); put("checkpointMs",n.checkpointMs)
         put("segments", JSONArray().apply { n.segments.forEach { put(JSONObject().put("start",it.start).put("end",it.end).put("text",it.text).put("id",it.id)) } })
     }
-    private fun decode(j: JSONObject) = Note(j.getString("id"),j.getString("title"),j.getString("audio"),j.getBoolean("owned"),j.optString("source").takeIf { it.isNotEmpty() && it != "null" },j.getLong("duration"),j.getLong("created"),j.getLong("modified"),j.getString("language"),j.getString("model"),j.getString("status"),j.getInt("progress"),j.optString("error").takeIf { it.isNotEmpty() && it != "null" },j.getJSONArray("segments").let { a -> List(a.length()) { i -> a.getJSONObject(i).let { Segment(it.getLong("start"),it.getLong("end"),it.getString("text"),it.optString("id").ifBlank { "legacy-$i" }) } } },j.optLong("checkpointMs",0),if(j.isNull("label")) null else j.getString("label").takeIf { it.isNotBlank() })
+    private fun decode(j: JSONObject) = Note(j.getString("id"),j.getString("title"),j.getString("audio"),j.getBoolean("owned"),j.optString("source").takeIf { it.isNotEmpty() && it != "null" },j.getLong("duration"),j.getLong("created"),j.getLong("modified"),j.getString("language"),j.getString("model"),j.getString("status"),j.getInt("progress"),j.optString("error").takeIf { it.isNotEmpty() && it != "null" },j.getJSONArray("segments").let { a -> List(a.length()) { i -> a.getJSONObject(i).let { Segment(it.getLong("start"),it.getLong("end"),it.getString("text"),it.optString("id").ifBlank { "legacy-$i" }) } } },j.optLong("checkpointMs",0),readNoteLabels(j),readBookmarks(j.optJSONObject("extras") ?: JSONObject(),j.getLong("duration")),readTranslations(j.optJSONObject("extras") ?: JSONObject()))
 }
 
 fun timestamp(ms: Long, srt: Boolean = false): String {
@@ -113,8 +129,18 @@ fun timestamp(ms: Long, srt: Boolean = false): String {
 }
 object Exporter {
     fun render(n: Note, format: String): String = when(format) {
+        "translated" -> n.title + "\n\n" + n.translations.mapNotNull { t -> n.segments.firstOrNull {it.id==t.segmentId && it.text==t.source}?.let { s -> "${timestamp(s.start)} [${t.target}]\n${t.source}\n${t.text}" } }.joinToString("\n\n")
         "srt" -> n.segments.filter { it.text.isNotBlank() }.mapIndexed { i,s -> "${i+1}\n${timestamp(s.start,true)} --> ${timestamp(s.end,true)}\n${s.text.trim()}\n" }.joinToString("\n")
         "md" -> "# ${n.title}\n\n" + n.segments.filter { it.text.isNotBlank() }.joinToString("\n\n") { "**${timestamp(it.start)}**\n\n${it.text}" }
         else -> n.title + "\n\n" + n.segments.filter { it.text.isNotBlank() }.joinToString("\n\n") { "${timestamp(it.start)}\n${it.text}" }
     }
+}
+
+/** New documents use a set; legacy notes and archives keep their original single label. */
+internal fun readNoteLabels(j: JSONObject): Set<String> {
+    val values=if(j.has("labels")) j.getJSONArray("labels").let { a ->
+        List(a.length()) { a.getString(it) }
+    } else listOfNotNull(if(j.isNull("label")) null else j.getString("label").takeIf {it.isNotBlank()})
+    require(values.all {it.isNotBlank() && it.length<=60}) {"Invalid label."}
+    return values.toSet()
 }

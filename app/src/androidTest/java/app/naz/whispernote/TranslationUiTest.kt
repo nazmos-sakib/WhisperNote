@@ -63,6 +63,7 @@ class TranslationUiTest {
                     if (state.results[it.id]?.text != null) session.toggle(it.id) else session.request(it.id, it.text)
                 })
         } }
+        compose.onNodeWithContentDescription("Show note actions").performClick()
         compose.onNodeWithTag("translation-toolbar").performClick()
         compose.runOnIdle { assertTrue(toolbarOpened) }
         compose.onNodeWithTag("segment-translate-${segment.id}").performScrollTo().performClick()

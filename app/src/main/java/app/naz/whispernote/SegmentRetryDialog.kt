@@ -10,26 +10,42 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import app.naz.whispernote.core.*
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun SegmentRetryDialog(note: Note, target: Segment?, draft: SegmentRetry?, vm: NotesViewModel, dismiss: ()->Unit) {
+    val notificationPermission=androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) {}
+    val session by vm.transcription.state.collectAsState()
+    var changing by rememberSaveable {mutableStateOf(false)}
+    var replacement by rememberSaveable {mutableStateOf<String?>(null)}
+    LaunchedEffect(session) { if(replacement!=null && session.operation==null && session.model==replacement) {changing=false;replacement=null} }
     val segment=draft?.original ?: target ?: return
     var model by rememberSaveable(segment.id) { mutableStateOf(ModelCatalog.models.firstOrNull {it.id==note.model}?.id ?: "base") }
     var language by rememberSaveable(segment.id) {mutableStateOf(note.language)}
     val downloads by ModelDownloads.progress.collectAsState()
     val modelReady=remember(model,downloads) {vm.models.ready(model)}
-    AlertDialog(onDismissRequest=dismiss,title={Text("Retranscribe ${timestamp(segment.start)}–${timestamp(segment.end)}")},text={
-        Column(Modifier.verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(12.dp)) {
+    ModalBottomSheet(onDismissRequest=dismiss) {
+        Column(Modifier.padding(24.dp).navigationBarsPadding()) {
+        Text("Retranscribe ${timestamp(segment.start)}–${timestamp(segment.end)}",style=MaterialTheme.typography.titleLarge)
+        Column(Modifier.weight(1f,fill=false).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(12.dp)) {
             if(draft==null) {
                 Text("Only this audio range is sent to the local model. Your current text stays unchanged until you accept a suggestion.")
-                ModelPicker(model) {model=it}
+                if(session.operation!=null) {
+                    Text(session.operation!!)
+                    CircularProgressIndicator()
+                } else if(session.model!=null && !changing) {
+                    ModelInformation(session.model!!)
+                    TextButton(onClick={changing=true}) {Text("Change Model")}
+                } else ModelPicker(model) {model=it}
                 OutlinedTextField(language,{language=it.lowercase().trim()},label={Text("Language code (de, en…) ")},supportingText={Text("Leave blank for automatic detection.")},singleLine=true)
-                if(!modelReady) Text("Download this model from Models in the drawer first.",color=MaterialTheme.colorScheme.error)
+                if(!modelReady && (session.model==null || changing)) Text("Download this model from Models in the drawer first.",color=MaterialTheme.colorScheme.error)
                 Text("Retrying with the same settings may produce the same words. Audio preparation may also need to decode earlier parts of the recording.",style=MaterialTheme.typography.bodySmall)
             } else if(draft.busy) {
-                Text("${draft.status} · ${draft.progress}%")
+                Text("${draft.status}…")
                 LinearProgressIndicator(Modifier.fillMaxWidth())
-                Text("You can close this dialog or leave the note. The suggestion will be saved for review.")
+                Text("You can close this sheet or leave the note. The suggestion will be saved for review.")
                 TextButton(onClick={vm.discardRetry(note.id);dismiss()}) {Text("Cancel retranscription")}
+
             } else if(draft.status=="Failed") {
                 Text(draft.error ?: "Retranscription failed.",color=MaterialTheme.colorScheme.error)
                 Text("Your original text is unchanged.")
@@ -48,8 +64,18 @@ internal fun SegmentRetryDialog(note: Note, target: Segment?, draft: SegmentRetr
                 TextButton(onClick={vm.discardRetry(note.id);dismiss()}) {Text("Keep original")}
             }
         }
-    },confirmButton={
-        if(draft==null) TextButton(onClick={vm.retrySegment(note.id,segment.id,model,language)},enabled=modelReady) {Text("Generate suggestion")}
-        else TextButton(onClick=dismiss) {Text("Close")}
-    },dismissButton={if(draft==null) TextButton(onClick=dismiss) {Text("Cancel")}})
+        if(draft==null) {
+            Button(onClick={
+                if(changing) {replacement=model;vm.loadModel(model)}
+                else {
+                    if(android.os.Build.VERSION.SDK_INT>=33) notificationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                    vm.retrySegment(note.id,segment.id,session.model ?: model,language)
+                }
+            },enabled=session.operation==null && (if(changing || session.model==null) modelReady else true)) {
+                Text(if(changing) "Load selected model" else if(session.model!=null) "Start" else "Load model and re-transcribe")
+            }
+            TextButton(onClick=dismiss) {Text("Cancel")}
+        } else TextButton(onClick=dismiss) {Text("Close")}
+        }
+    }
 }

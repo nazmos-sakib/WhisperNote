@@ -14,19 +14,66 @@ home: true
   <p class="eyebrow">A little space for every spoken thought</p>
   <h2>Your recording, easier to revisit.</h2>
   <p class="section-intro">A library for your audio, a transcript you can edit, and playback that stays with you.</p>
-  <div class="screenshots">
+  <div class="gallery-controls" hidden>
+    <button type="button" data-gallery="previous" aria-label="Previous screenshots" aria-controls="screenshot-track">←</button>
+    <button type="button" data-gallery="toggle" aria-pressed="false">Pause slideshow</button>
+    <button type="button" data-gallery="next" aria-label="Next screenshots" aria-controls="screenshot-track">→</button>
+  </div>
+  <div class="screenshots" id="screenshot-track" tabindex="0" role="region" aria-label="App screenshots">
+    <figure><img src="{{ '/assets/screenshots/add-audio.png' | relative_url }}" alt="Add audio sheet with Whisper model selection, audio file picker, complete-note import and direct HTTPS audio download" width="864" height="1920" loading="lazy"><figcaption><strong>Bring your audio or a complete note</strong>Choose a model and an audio file, paste a direct audio link, or import a .whispernote file.</figcaption></figure>
+    <figure><img src="{{ '/assets/screenshots/home-screen.png' | relative_url }}" alt="WhisperNote home screen with note search, an audio library and a new transcription button" width="864" height="1920" loading="lazy"><figcaption><strong>Your audio, all together</strong>Search your notes, revisit a recording, or start a new transcription.</figcaption></figure>
+    <figure><img src="{{ '/assets/screenshots/app-drawer.png' | relative_url }}" alt="WhisperNote navigation drawer showing note labels, translation models, models and note import" width="864" height="1920" loading="lazy"><figcaption><strong>Keep your notes organized</strong>Browse labels and find your models and note import tools in one place.</figcaption></figure>
     <figure><img src="{{ '/assets/screenshots/translation.png' | relative_url }}" alt="WhisperNote translation interface with sample text" width="1080" height="2400" loading="lazy"><figcaption><strong>Understand a little more</strong>Translate a segment or look up a selected word or phrase.</figcaption></figure>
     <figure><img src="{{ '/assets/screenshots/models.png' | relative_url }}" alt="Translation models screen showing ten language pairs and download controls" width="1080" height="2400" loading="lazy"><figcaption><strong>Choose your languages</strong>Download shared language packs and translate offline.</figcaption></figure>
   </div>
-  <p class="fine-print">Actual app screenshots from a demonstration build. The transcript is sample text, not a personal recording; appearance may vary by version and device.</p>
+  <p class="fine-print">Actual app screenshots; appearance may vary by version and device.</p>
 </section>
-<section class="section">
+<section class="section" id="features">
   <p class="eyebrow">From audio to something useful</p>
   <h2>Built around the way you listen.</h2>
+  <div class="feature-showcase">
   <div class="features">
-    <article><span class="step">01 / TRANSCRIBE</span><h3>Let the recording become text.</h3><p>Download a Whisper model, import audio, and transcribe on your device. Edit timestamped text or regenerate an individual segment.</p></article>
-    <article><span class="step">02 / UNDERSTAND</span><h3>Make room for another language.</h3><p>Download ML Kit language packs for ten translation pairs. Read inline translations or select a phrase for a quick lookup.</p></article>
-    <article><span class="step">03 / KEEP LISTENING</span><h3>Take the audio with you.</h3><p>Listen in the background, control playback from the notification, and return to your saved position. Export text or a complete note with audio.</p></article>
+    <article><span class="step">01 / ADD AUDIO</span><h3>Start with a recording.</h3><p>Choose an audio file from your device or download one from a direct HTTPS audio link. Select a transcription model and let WhisperNote turn it into a note.</p></article>
+    <article><span class="step">02 / TRANSCRIBE</span><h3>Keep transcription on your device.</h3><p>Download a multilingual Tiny, Base or Small Whisper model in Standard or Compact (Q5) format. Follow progress as timestamped segments appear, and resume interrupted transcription from saved progress.</p></article>
+    <article><span class="step">03 / ORGANIZE</span><h3>Find the words again.</h3><p>Browse your audio library, organize notes with labels, and search titles and transcript text. Jump from a search result to the matching segment.</p></article>
+    <article><span class="step">04 / EDIT</span><h3>Make the transcript your own.</h3><p>Rename notes and edit text with automatic saving. Clear a segment’s text while keeping its audio and timestamps, or retranscribe that section with a chosen model and review the result before accepting it.</p></article>
+    <article><span class="step">05 / LISTEN</span><h3>Listen at your own pace.</h3><p>Play in the background with notification and lock-screen controls. Adjust speed from 0.5× to 2×, skip ten seconds, play from a segment, and follow highlighted text. Each note remembers your listening position.</p></article>
+    <article><span class="step">06 / TRANSLATE</span><h3>Make room for another language.</h3><p>Download ML Kit language packs for ten translation pairs. Translate individual segments offline or long-press a word or phrase for a lookup, then copy or share selected text.</p></article>
+    <article><span class="step">07 / EXPORT TEXT</span><h3>Use your words elsewhere.</h3><p>Export a transcript as plain text (TXT), Markdown or timestamped SRT subtitles. Save it to a destination you choose or share it with another Android app.</p></article>
+    <article><span class="step">08 / TRANSFER NOTES</span><h3>Take the whole note with you.</h3><p>Save or share a complete <strong>.whispernote</strong> file containing the original audio, edited transcript, timestamps and label. Import it into WhisperNote to read and listen without transcribing it again.</p></article>
+    <article><span class="step">09 / MAKE IT COMFORTABLE</span><h3>Settle in for a longer listen.</h3><p>The library adapts to your screen and follows your system’s light or dark theme. A mini-player keeps playback within reach while you browse your notes.</p></article>
+  </div>
+  <aside class="demo-column" aria-label="App demonstration">
+    <figure class="app-demo">
+      <video autoplay muted loop controls playsinline preload="metadata" poster="{{ '/assets/screenshots/home-screen.png' | relative_url }}" aria-label="WhisperNote app demonstration">
+        <source src="{{ '/assets/screenshots/screen-recorder.mp4' | relative_url }}" type="video/mp4">
+        <a href="{{ '/assets/screenshots/screen-recorder.mp4' | relative_url }}">Open the MP4 demonstration</a>.
+      </video>
+      <figcaption><span>Follow along in the app.</span><button type="button" id="demo-sound" aria-pressed="false" hidden>Turn sound on</button></figcaption>
+    </figure>
+  </aside>
+  </div>
+</section>
+<section class="section" id="note-transfer">
+  <p class="eyebrow">Import, export and keep a copy</p>
+  <h2>Move a note, not just its words.</h2>
+  <ol>
+    <li>Open a note’s export dialog. Choose TXT, Markdown or SRT for the transcript, or <strong>Save complete note</strong> to keep the audio and transcript together. Use <strong>Share</strong> to send a complete note to another app.</li>
+    <li>On the receiving device, open <strong>Import complete note</strong> in the navigation drawer or new-transcription sheet and choose the <strong>.whispernote</strong> file.</li>
+    <li>The imported note is added as a new copy, without overwriting existing notes. Read and play it offline; download its transcription model only if you want to continue an unfinished transcript.</li>
+  </ol>
+  <p class="fine-print">Keep exported notes in a separate location for a portable backup. Model downloads and device-specific listening positions are not included in complete-note files.</p>
+</section>
+<section class="section" id="next-version">
+  <p class="eyebrow">In development · Version 1.1</p>
+  <h2>More ways to capture and revisit.</h2>
+  <p class="section-intro">These features are implemented in the current development build and are pending release validation.</p>
+  <div class="features">
+    <article><h3>Record or share audio in.</h3><p>Record with pause and resume controls, then stop to save and queue transcription. Send audio to WhisperNote directly from Android’s share sheet.</p></article>
+    <article><h3>Back up the library.</h3><p>Back up and restore notes and audio together with labels, bookmarks and saved translations in a ZIP file. Restore adds copies without overwriting existing notes; models and listening positions are excluded.</p></article>
+    <article><h3>Bookmark and find.</h3><p>Bookmark a playback position with an optional comment. Search within a transcript and move between matching segments, with an optional keep-screen-awake setting for reading.</p></article>
+    <article><h3>Keep translations.</h3><p>Save completed segment translations for later and export bilingual text with the Translated option. Saved translations also travel with complete-note and library archives.</p></article>
+    <article><h3>Manage longer recordings.</h3><p>Pause and resume transcription, prioritize a queued note with Process next, and choose Fast, Balanced or Accurate presets. Optional speech detection skips silence, but may miss quiet speech.</p></article>
   </div>
 </section>
 <section class="section">
@@ -40,3 +87,5 @@ home: true
   <p>Transcription and built-in translation run on your device. Downloads, Google ML Kit diagnostics, and sharing with another app can involve network services. Know what stays local and what leaves.</p>
   <a href="{{ '/privacy/' | relative_url }}">Read the privacy policy →</a>
 </section>
+
+<script src="{{ "/assets/js/home.js" | relative_url }}" defer></script>

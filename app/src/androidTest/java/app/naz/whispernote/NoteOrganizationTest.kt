@@ -19,13 +19,14 @@ class NoteOrganizationTest {
             val label=repo.createLabel(" German season 1 ")
             assertEquals(label,repo.createLabel("GERMAN SEASON 1"))
             val note=Note(title="Episode one",segments=listOf(Segment(0,1000,"Guten Tag")))
-            repo.put(note);repo.assignLabel(note.id,label);repo.renameLabel(label,"German lessons");repo.close()
+            val favorite=repo.createLabel("Favorite")
+            repo.put(note);repo.setLabel(note.id,label,true);repo.setLabel(note.id,favorite,true);repo.renameLabel(label,"German lessons");repo.close()
             val reopened=NoteRepository(context,db);reopened.load()
-            assertEquals("German lessons",reopened.get(note.id)!!.label)
+            assertEquals(setOf("German lessons","Favorite"),reopened.get(note.id)!!.labels)
             reopened.deleteLabel("German lessons")
-            assertNull(reopened.get(note.id)!!.label)
+            assertEquals(setOf("Favorite"),reopened.get(note.id)!!.labels)
             assertEquals(note.segments,reopened.get(note.id)!!.segments)
-            assertTrue(reopened.labels.value.isEmpty());reopened.close()
+            assertEquals(listOf("Favorite"),reopened.labels.value);reopened.close()
         } finally {context.deleteDatabase(db)}
     }
     @Test fun completeNoteRoundTripIncludesIdenticalAudioAndTimestampedEdits() {
@@ -34,12 +35,12 @@ class NoteOrganizationTest {
         var imported: Note?=null
         try {
             val original=Note(title="German lesson",audio=Uri.fromFile(audio).toString(),duration=11000,created=1234,modified=5678,
-                language="de",model="base-q5_1",status="Completed",checkpointMs=11000,label="Season 1",
+                language="de",model="base-q5_1",status="Completed",checkpointMs=11000,labels=setOf("Season 1","Favorite"),
                 segments=listOf(Segment(120,2500,"Corrected words"),Segment(2500,3100,""),Segment(3100,10000,"Second sentence")))
             val bytes=ByteArrayOutputStream().also {NoteArchive.write(context,original,it)}.toByteArray()
             imported=NoteArchive.read(context,ByteArrayInputStream(bytes))
             assertNotEquals(original.id,imported.id)
-            assertEquals(original.title,imported.title);assertEquals(original.label,imported.label)
+            assertEquals(original.title,imported.title);assertEquals(original.labels,imported.labels)
             assertEquals(original.created,imported.created);assertEquals(original.modified,imported.modified)
             assertEquals(original.model,imported.model);assertEquals(original.language,imported.language)
             assertEquals(original.checkpointMs,imported.checkpointMs);assertEquals(original.status,imported.status)
@@ -62,9 +63,19 @@ class NoteOrganizationTest {
         try {
             val repo=NoteRepository(context,db);repo.load();val note=Note(title="Old note");repo.put(note)
             val raw=repo.readableDatabase.rawQuery("SELECT document FROM notes",null).use {it.moveToFirst();JSONObject(it.getString(0))}
-            raw.remove("label")
+            raw.remove("label");raw.remove("labels")
             repo.writableDatabase.execSQL("UPDATE notes SET document=?",arrayOf(raw.toString()));repo.load()
-            assertNull(repo.get(note.id)!!.label);repo.close()
+            assertTrue(repo.get(note.id)!!.labels.isEmpty())
+            raw.put("label","Lecture")
+            repo.writableDatabase.execSQL("UPDATE notes SET document=?",arrayOf(raw.toString()));repo.load()
+            assertEquals(setOf("Lecture"),repo.get(note.id)!!.labels)
+            repo.createLabel("Lecture");repo.createLabel("Favorite")
+            repo.setLabel(note.id,"Favorite",true)
+            assertEquals(setOf("Lecture","Favorite"),repo.get(note.id)!!.labels)
+            repo.setLabel(note.id,"Lecture",false)
+            assertEquals(setOf("Favorite"),repo.get(note.id)!!.labels)
+            repo.clearLabels(note.id)
+            assertTrue(repo.get(note.id)!!.labels.isEmpty());repo.close()
         } finally {context.deleteDatabase(db)}
     }
 }

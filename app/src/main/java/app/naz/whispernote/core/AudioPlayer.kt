@@ -10,11 +10,13 @@ class AudioPlayer(
     context: Context,
     uri: String,
     initialPosition: Long = 0,
+    private val onCompleted: () -> Unit = {},
     private val savePosition: (Long) -> Unit = {}
 ) {
     val state=MutableStateFlow(Playback())
     private val scope=CoroutineScope(SupervisorJob()+Dispatchers.Main.immediate)
     private val player=MediaPlayer()
+    private var reachedEnd=false
     private var prepared=false
     private var seeking=false
     private var released=false
@@ -38,8 +40,11 @@ class AudioPlayer(
                 if(restored>0) { seeking=true; it.seekTo(restored.toInt()) }
             }
             player.setOnCompletionListener {
+                val listened=state.value.playing && !seeking
+                reachedEnd=true
                 state.value=state.value.copy(playing=false,position=state.value.duration)
                 checkpoint()
+                if(listened) onCompleted()
             }
             player.setOnErrorListener { _,_,_ ->
                 state.value=state.value.copy(error="Cannot play this audio.",ready=false,playing=false)
@@ -49,7 +54,7 @@ class AudioPlayer(
             player.prepareAsync()
             scope.launch {
                 while(isActive) {
-                    if(state.value.ready && !seeking) {
+                    if(state.value.ready && !seeking && !reachedEnd) {
                         state.value=state.value.copy(position=player.currentPosition.toLong(),playing=player.isPlaying)
                         if(++ticksSinceSave>=20) checkpoint() // Every five seconds during listening.
                     }
@@ -81,6 +86,7 @@ class AudioPlayer(
         if (!state.value.ready || released) return
         try {
             if (state.value.position >= state.value.duration && state.value.duration > 0) seek(0)
+            reachedEnd=false
             player.start()
             state.value = state.value.copy(playing=true, error=null)
         } catch (e: Exception) { state.value=state.value.copy(playing=false, error="Cannot play this audio.") }
@@ -88,18 +94,15 @@ class AudioPlayer(
     fun pause() {
         if (!prepared || released) return
         if (player.isPlaying) player.pause()
-        state.value=state.value.copy(playing=false,position=if(seeking) state.value.position else player.currentPosition.toLong())
+        state.value=state.value.copy(playing=false,position=if(seeking || reachedEnd) state.value.position else player.currentPosition.toLong())
         checkpoint()
     }
     fun toggle() {
-        if(state.value.ready) {
-            if(player.isPlaying) player.pause() else player.start()
-            state.value=state.value.copy(playing=player.isPlaying,position=if(seeking) state.value.position else player.currentPosition.toLong())
-            checkpoint()
-        }
+        if(state.value.ready) { if(state.value.playing) pause() else play() }
     }
     fun seek(ms: Long,play: Boolean=false) {
         if(state.value.ready) {
+            reachedEnd=false
             val target=ms.coerceIn(0,state.value.duration)
             seeking=true
             player.seekTo(target.toInt())
@@ -110,7 +113,7 @@ class AudioPlayer(
     }
     fun release() {
         if(released) return
-        if(prepared && !seeking) state.value=state.value.copy(position=player.currentPosition.toLong())
+        if(prepared && !seeking && !reachedEnd) state.value=state.value.copy(position=player.currentPosition.toLong())
         checkpoint()
         released=true;scope.cancel();player.release()
     }

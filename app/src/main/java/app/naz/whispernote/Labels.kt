@@ -1,6 +1,9 @@
 package app.naz.whispernote
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -11,16 +14,25 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
 @Composable
-fun LabelPicker(labels: List<String>, selected: String?, onSelect: (String?) -> Unit, onCreate: (String) -> Unit, dismiss: () -> Unit) {
+fun LabelPicker(labels: List<String>, selected: Set<String>, onToggle: (String, Boolean) -> Unit,
+                onClear: () -> Unit, onCreate: (String) -> Unit, dismiss: () -> Unit) {
     var creating by remember { mutableStateOf(false) }
-    AlertDialog(onDismissRequest=dismiss,title={Text("Move to label")},text={
+    AlertDialog(onDismissRequest=dismiss,title={Text("Note labels")},text={
         Column(Modifier.verticalScroll(rememberScrollState())) {
-            Text("Organize this note into a series or subject.")
-            TextButton(onClick={onSelect(null);dismiss()}) { Text(if(selected==null) "✓ Unlabelled" else "Unlabelled") }
-            labels.forEach { label -> TextButton(onClick={onSelect(label);dismiss()}) { Text(if(selected==label) "✓ $label" else label) } }
+            Text("Choose one or more labels, such as Lecture and Favorite.")
+            if(selected.isEmpty()) Text("Unlabelled",style=MaterialTheme.typography.labelMedium,modifier=Modifier.padding(vertical=8.dp))
+            labels.forEach { label ->
+                Row(Modifier.fillMaxWidth().heightIn(min=48.dp)
+                    .toggleable(value=label in selected,role=Role.Checkbox,onValueChange={onToggle(label,it)}),
+                    verticalAlignment=Alignment.CenterVertically) {
+                    Checkbox(checked=label in selected,onCheckedChange=null)
+                    Text(label,modifier=Modifier.weight(1f).padding(start=8.dp))
+                }
+            }
+            TextButton(onClick=onClear,enabled=selected.isNotEmpty()) {Text("Remove all labels")}
             TextButton(onClick={creating=true}) { Icon(Icons.Outlined.Add,null); Text("Create label") }
         }
-    },confirmButton={TextButton(onClick=dismiss) {Text("Close")}})
+    },confirmButton={TextButton(onClick=dismiss) {Text("Done")}})
     if(creating) LabelNameDialog(null,{onCreate(it);creating=false},{creating=false})
 }
 

@@ -70,6 +70,21 @@ class ModelManager(context: Context) {
         get() = preferences.getString("preferred", "tiny").takeIf { id -> models.any { it.id == id } } ?: "tiny"
         set(value) { ModelCatalog.get(value); preferences.edit().putString("preferred", value).apply() }
 
+    val vadFile get() = File(directory,"ggml-silero-v5.1.2.bin")
+    val vadReady get() = vadFile.isFile && vadFile.length()==885098L
+    var skipSilence: Boolean
+        get() = preferences.getBoolean("skip-silence",false)
+        set(value) {preferences.edit().putBoolean("skip-silence",value).apply()}
+    suspend fun downloadVad(progress: (Int)->Unit) = downloadMutex.withLock {
+        if(vadReady) return@withLock
+        val staging=File(directory,"vad.download")
+        try {
+            Downloader.download("https://huggingface.co/ggml-org/whisper-vad/resolve/9ffd54a1e1ee413ddf265af9913beaf518d1639b/ggml-silero-v5.1.2.bin",staging,progress)
+            progress(100)
+            ModelFiles.verifyAndPublish(staging,vadFile,Model("vad","vad",false,885098,"29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf"))
+        } finally {staging.delete()}
+    }
+
     fun file(id: String): File { ModelCatalog.get(id); return File(directory, "ggml-$id.bin") }
     fun ready(id: String) = file(id).let { it.isFile && it.length() == ModelCatalog.get(id).bytes }
 

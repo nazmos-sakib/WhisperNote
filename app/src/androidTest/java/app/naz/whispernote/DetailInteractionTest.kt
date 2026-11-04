@@ -19,13 +19,15 @@ class DetailInteractionTest {
         checkpointMs = 300000, segments = List(30) { Segment(it * 10000L, (it + 1) * 10000L,
             "Paragraph $it. Some useful words in this audio note, with enough text to read while listening.", "s$it") }))
     private val playback = mutableStateOf(Playback(ready = true, playing = true, position = 1000, duration = 300000))
+    private val model = mutableStateOf(TranscriptionState())
+    private val retry = mutableStateOf<String?>(null)
     private val list = LazyListState()
     private var toggles = 0
     private var sought: Long? = null
     private fun show() {
         compose.setContent { WhisperNoteTheme { TranscriptDetailContent(note.value, "", playback.value,
             {}, { id, text -> note.value = note.value.editSegment(id, text) },
-            { id -> note.value = note.value.clearSegment(id) }, { toggles++;playback.value=playback.value.copy(playing=!playback.value.playing) }, { position, play -> sought=position;playback.value=playback.value.copy(position=position,playing=play) }, {}, {}, {}, {}, list, onSpeed={playback.value=playback.value.copy(speed=it)}) } }
+            { id -> note.value = note.value.clearSegment(id) }, { toggles++;playback.value=playback.value.copy(playing=!playback.value.playing) }, { position, play -> sought=position;playback.value=playback.value.copy(position=position,playing=play) }, {}, {}, {}, {}, list, modelState=model.value, retryStatus=retry.value, onSpeed={playback.value=playback.value.copy(speed=it)}) } }
         // Showing the test window above the keyguard is asynchronous on some devices.
         compose.waitUntil(10000) {
             runCatching { compose.onAllNodesWithTag("transcript-list").fetchSemanticsNodes().isNotEmpty() }.getOrDefault(false)
@@ -42,6 +44,32 @@ class DetailInteractionTest {
             val item = info.visibleItemsInfo.first { it.key == id }
             assertEquals((info.viewportStartOffset + info.viewportEndOffset) / 2f, item.offset + item.size / 2f, 4f)
         }
+    }
+    @Test fun pendingResultTakesPriorityAndSurvivesModelUnloading() {
+        show()
+        compose.onNodeWithTag("detail-toolbar-title",useUnmergedTree=true).assertTextEquals("Example interview")
+        compose.onNodeWithTag("detail-toolbar-actions").assertDoesNotExist()
+        compose.onNodeWithTag("detail-model-status").assertDoesNotExist()
+        compose.runOnIdle {model.value=TranscriptionState("tiny","Re-transcribing…")}
+        compose.onNodeWithContentDescription("Re-transcribing…").assertIsDisplayed()
+        compose.runOnIdle {retry.value="Ready"}
+        compose.onNodeWithContentDescription("Review re-transcription suggestion").assertIsDisplayed()
+        compose.runOnIdle {model.value=TranscriptionState()}
+        compose.onNodeWithContentDescription("Review re-transcription suggestion").assertIsDisplayed()
+        compose.runOnIdle {retry.value=null;model.value=TranscriptionState("tiny")}
+        compose.onNodeWithTag("detail-model-status").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Show note actions").performClick()
+        compose.onNodeWithContentDescription("Transcription model ready").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Hide note actions").performClick()
+        compose.onNodeWithTag("detail-toolbar-actions").assertDoesNotExist()
+    }
+    @Test fun scrollToTopAppearsOnlyAwayFromBeginning() {
+        show()
+        compose.onNodeWithContentDescription("Scroll to top").assertDoesNotExist()
+        compose.onNodeWithTag("transcript-list").performScrollToIndex(20)
+        compose.onNodeWithContentDescription("Scroll to top").assertIsDisplayed().performClick()
+        compose.waitUntil(5000) {list.firstVisibleItemIndex==0 && list.firstVisibleItemScrollOffset==0}
+        compose.onNodeWithContentDescription("Scroll to top").assertDoesNotExist()
     }
     @Test fun followingCentersFirstMiddleAndLastAndTouchStopsFollowing() {
         show()

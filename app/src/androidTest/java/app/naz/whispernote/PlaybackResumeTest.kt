@@ -48,6 +48,47 @@ class PlaybackResumeTest {
             positions.remove(id);positions.remove(other);audio.delete()
         }
     }
+    @Test fun naturalEndMarksCompletedAndReplayStartsFromBeginning() {
+        val id=UUID.randomUUID().toString()
+        val audio=File(context.cacheDir,"completion-$id.wav")
+        val positions=PlaybackPositions(context)
+        var player: AudioPlayer?=null
+        try {
+            instrumentation.context.assets.open("jfk.wav").use {input -> audio.outputStream().use {input.copyTo(it)}}
+            instrumentation.runOnMainSync {
+                player=AudioPlayer(context,Uri.fromFile(audio).toString(),onCompleted={positions.markCompleted(id,true)}) {positions.save(id,it)}
+            }
+            awaitReady(player!!)
+            instrumentation.runOnMainSync {player!!.seek(player!!.state.value.duration-600)}
+            Thread.sleep(300)
+            assertFalse(positions.progress(id).completed)
+            instrumentation.runOnMainSync {player!!.play()}
+            val deadline=System.currentTimeMillis()+5000
+            while(!positions.progress(id).completed && System.currentTimeMillis()<deadline) Thread.sleep(50)
+            assertTrue(positions.progress(id).completed)
+            instrumentation.runOnMainSync {player!!.toggle()}
+            Thread.sleep(300)
+            assertTrue(player!!.state.value.position<2000)
+        } finally {
+            instrumentation.runOnMainSync {player?.release()}
+            positions.remove(id);audio.delete()
+        }
+    }
+    @Test fun listeningCompletionIsIndependentAndDurable() {
+        val id=UUID.randomUUID().toString()
+        val positions=PlaybackPositions(context)
+        try {
+            assertEquals(app.naz.whispernote.core.ListeningState.Unplayed,positions.progress(id).state)
+            positions.save(id,5000)
+            assertEquals(app.naz.whispernote.core.ListeningState.InProgress,positions.progress(id).state)
+            positions.markCompleted(id,true)
+            positions.save(id,6000)
+            assertTrue(PlaybackPositions(context).progress(id).completed)
+            positions.markCompleted(id,false)
+            assertFalse(PlaybackPositions(context).progress(id).completed)
+            assertEquals(6000L,positions.get(id))
+        } finally { positions.remove(id) }
+    }
     @Test fun releasingBeforePreparationDoesNotEraseSavedPosition() {
         val id=UUID.randomUUID().toString();val positions=PlaybackPositions(context)
         positions.save(id,420000)

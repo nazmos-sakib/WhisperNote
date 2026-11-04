@@ -10,6 +10,8 @@ class WhisperEngine {
         fun onLanguage(language: String) {}
         fun isCancelled(): Boolean
     }
-    external fun transcribe(model: String, pcm: String, resumeMs: Long, language: String, listener: Listener): String
+    external fun load(model: String)
+    external fun unload()
+    external fun transcribe(model: String, pcm: String, resumeMs: Long, language: String, listener: Listener, vadModel: String = ""): String
     companion object { init { System.loadLibrary("whispernote") } }
 }

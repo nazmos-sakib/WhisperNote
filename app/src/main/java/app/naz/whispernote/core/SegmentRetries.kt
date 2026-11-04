@@ -28,6 +28,12 @@ class SegmentRetries(context: Context, name: String="segment_retries") {
         }.getOrNull() }.toMap()
         state.value.values.filter {it.busy}.forEach {put(it.copy(status="Failed",error="Retranscription was interrupted. Your original text is unchanged. Try again."))}
     }
+    @Synchronized fun start(draft: SegmentRetry) {
+        check(state.value.values.none {it.busy || it.status=="Ready"} && get(draft.noteId)==null) {
+            "Review or discard the current re-transcription before starting another."
+        }
+        put(draft)
+    }
     @Synchronized fun get(noteId: String)=state.value[noteId]
     @Synchronized fun put(draft: SegmentRetry) {
         val j=JSONObject().put("original",segment(draft.original)).put("model",draft.model).put("language",draft.language).put("id",draft.id)

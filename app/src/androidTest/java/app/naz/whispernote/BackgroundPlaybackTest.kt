@@ -80,7 +80,7 @@ class BackgroundPlaybackTest {
                 scenario.onActivity { it.showUiTestWindow() }
                 repeat(2) {
                     notification.contentIntent.send()
-                    compose.waitUntil(10000) { runCatching { compose.onAllNodesWithTag("translation-toolbar").fetchSemanticsNodes().isNotEmpty() }.getOrDefault(false) }
+                    compose.waitUntil(10000) { runCatching { compose.onAllNodesWithTag("detail-toolbar-title",useUnmergedTree=true).fetchSemanticsNodes().isNotEmpty() }.getOrDefault(false) }
                     compose.onNodeWithContentDescription("Back").performClick()
                     compose.onNodeWithContentDescription("Pause audio").assertExists()
                 }
@@ -109,7 +109,7 @@ class BackgroundPlaybackTest {
                     it.showUiTestWindow()
                     translation=ViewModelProvider(it)[TranslationViewModel::class.java]
                 }
-                compose.waitUntil(10000) { runCatching { compose.onAllNodesWithTag("translation-toolbar").fetchSemanticsNodes().isNotEmpty() }.getOrDefault(false) }
+                compose.waitUntil(10000) { runCatching { compose.onAllNodesWithTag("detail-toolbar-title",useUnmergedTree=true).fetchSemanticsNodes().isNotEmpty() }.getOrDefault(false) }
                 scenario.onActivity {
                     translation.session.activate(TranslationPair("de","en"))
                     app.playback.toggle(note)

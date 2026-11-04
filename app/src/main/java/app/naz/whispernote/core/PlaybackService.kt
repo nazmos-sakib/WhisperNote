@@ -149,7 +149,7 @@ class PlaybackService : Service() {
         controller.mutable.value = Listening(id, title.ifBlank { "Untitled note" }, audio)
         session.isActive = true
         session.setSessionActivity(openNote())
-        val selected = AudioPlayer(this, audio, positions.get(id)) { positions.save(id, it) }
+        val selected = AudioPlayer(this, audio, positions.get(id), onCompleted={positions.markCompleted(id,true)}) { positions.save(id, it) }
         player = selected
         observation = scope.launch {
             selected.state.collect { state ->

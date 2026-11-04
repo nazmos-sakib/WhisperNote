@@ -10,6 +10,28 @@
 #include <thread>
 #include <memory>
 #include <stdexcept>
+#include <mutex>
+
+static std::mutex modelMutex;
+static std::unique_ptr<whisper_context, decltype(&whisper_free)> retained(nullptr, whisper_free);
+static std::string retainedPath;
+static void loadModel(const std::string& path) {
+    if (retained && retainedPath == path) return;
+    retained.reset(); retainedPath.clear();
+    auto cp = whisper_context_default_params(); cp.use_gpu = false;
+    retained.reset(whisper_init_from_file_with_params(path.c_str(), cp));
+    if (!retained) throw std::runtime_error("Could not load model. Try a smaller model.");
+    retainedPath = path;
+}
+extern "C" JNIEXPORT void JNICALL Java_app_naz_whispernote_core_WhisperEngine_load(JNIEnv* env, jobject, jstring path) {
+    std::lock_guard<std::mutex> lock(modelMutex);
+    const char* chars = env->GetStringUTFChars(path, nullptr);
+    std::string value(chars); env->ReleaseStringUTFChars(path, chars);
+    try { loadModel(value); } catch (const std::exception& e) { env->ThrowNew(env->FindClass("java/lang/IllegalStateException"), e.what()); }
+}
+extern "C" JNIEXPORT void JNICALL Java_app_naz_whispernote_core_WhisperEngine_unload(JNIEnv*, jobject) {
+    std::lock_guard<std::mutex> lock(modelMutex); retained.reset(); retainedPath.clear();
+}
 
 struct Callback {
     JNIEnv* env;
@@ -62,13 +84,16 @@ static void newSegments(whisper_context* ctx, whisper_state*, int count, void* d
 }
 
 extern "C" JNIEXPORT jstring JNICALL Java_app_naz_whispernote_core_WhisperEngine_transcribe(
-    JNIEnv* env, jobject, jstring model, jstring pcm, jlong resumeMs, jstring language, jobject listener) {
+    JNIEnv* env, jobject, jstring model, jstring pcm, jlong resumeMs, jstring language, jobject listener, jstring vadModel) {
+    std::lock_guard<std::mutex> lock(modelMutex);
     const char* m = env->GetStringUTFChars(model, nullptr);
     std::string modelPath(m); env->ReleaseStringUTFChars(model, m);
     const char* p = env->GetStringUTFChars(pcm, nullptr);
     std::string pcmPath(p); env->ReleaseStringUTFChars(pcm, p);
     const char* l = env->GetStringUTFChars(language, nullptr);
     std::string selectedLanguage(l); env->ReleaseStringUTFChars(language, l);
+    const char* v = env->GetStringUTFChars(vadModel, nullptr);
+    std::string vadPath(v); env->ReleaseStringUTFChars(vadModel, v);
     int fd = -1;
     void* mapped = MAP_FAILED;
     size_t length = 0;
@@ -87,10 +112,8 @@ extern "C" JNIEXPORT jstring JNICALL Java_app_naz_whispernote_core_WhisperEngine
             env->GetMethodID(cls,"onSegment","(JJLjava/lang/String;)V"), env->GetMethodID(cls,"isCancelled","()Z"),
             env->GetMethodID(cls,"onLanguage","(Ljava/lang/String;)V"), resumeMs, durationMs, resumeMs};
         if (cancelled(&c)) throw std::runtime_error("Transcription interrupted.");
-        auto cp = whisper_context_default_params(); cp.use_gpu = false;
-        std::unique_ptr<whisper_context, decltype(&whisper_free)> ctx(
-            whisper_init_from_file_with_params(modelPath.c_str(), cp), whisper_free);
-        if (!ctx) throw std::runtime_error("Could not load model. Try the tiny model or download it again.");
+        loadModel(modelPath);
+        auto* ctx = retained.get();
         if (cancelled(&c)) throw std::runtime_error("Transcription interrupted.");
         // The UI can now leave Loading model; this does not advance the durable checkpoint.
         env->CallVoidMethod(listener, c.progress, (jint) (resumeMs * 100 / durationMs));
@@ -98,6 +121,9 @@ extern "C" JNIEXPORT jstring JNICALL Java_app_naz_whispernote_core_WhisperEngine
         params.n_threads = std::min(4u, std::max(1u, std::thread::hardware_concurrency()));
         params.language = selectedLanguage.empty() ? "auto" : selectedLanguage.c_str();
         params.translate = false;
+        params.vad = !vadPath.empty();
+        params.vad_model_path = vadPath.empty() ? nullptr : vadPath.c_str();
+        params.no_context = true; // Retained weights must not carry text from another audio range.
         params.print_realtime = false; params.print_progress = false; params.print_timestamps = false;
         params.abort_callback = cancelled; params.abort_callback_user_data = &c;
         params.new_segment_callback = newSegments; params.new_segment_callback_user_data = &c;
@@ -112,9 +138,11 @@ extern "C" JNIEXPORT jstring JNICALL Java_app_naz_whispernote_core_WhisperEngine
         // Infer only the unprocessed tail. Native timestamps are relative to that tail; callbacks restore
         // original-file offsets. Previously saved segments (including user edits) are never replaced.
         const int64_t offsetSamples = resumeMs * (WHISPER_SAMPLE_RATE / 1000);
-        int result = whisper_full(ctx.get(), params, static_cast<float*>(mapped) + offsetSamples, length / 4 - offsetSamples);
+        int result = whisper_full(ctx, params, static_cast<float*>(mapped) + offsetSamples, length / 4 - offsetSamples);
         if (result != 0 || cancelled(&c)) throw std::runtime_error("Transcription interrupted or failed.");
-        std::string detected = whisper_lang_str(whisper_full_lang_id(ctx.get()));
+        const int detectedId = whisper_full_lang_id(ctx);
+        const char* detectedName = detectedId >= 0 ? whisper_lang_str(detectedId) : nullptr;
+        std::string detected = detectedName ? detectedName : selectedLanguage;
         munmap(mapped, length); close(fd);
         return env->NewStringUTF(detected.c_str());
     } catch (const std::exception& e) {

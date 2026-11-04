@@ -34,6 +34,20 @@ class SegmentRetryIntegrationTest {
             assertEquals("Failed",reopened.get("unfinished")!!.status)
         } finally {context.deleteSharedPreferences(name)}
     }
+    @Test fun onlyOneRetryCanRunOrWaitForReviewAcrossNotes() {
+        val name="retry-gate-${UUID.randomUUID()}"
+        try {
+            val store=SegmentRetries(context,name);store.load()
+            val first=SegmentRetry("first",Segment(0,1000,"Original"),"tiny","en")
+            val second=first.copy(noteId="second",id=UUID.randomUUID().toString())
+            store.start(first)
+            assertTrue(runCatching {store.start(second)}.isFailure)
+            store.put(first.copy(status="Ready"))
+            assertTrue(runCatching {store.start(second)}.isFailure)
+            store.remove(first.noteId);store.start(second)
+            assertEquals(second,store.get(second.noteId))
+        } finally {context.deleteSharedPreferences(name)}
+    }
     @Test fun serviceProducesBoundedSuggestionWithoutChangingOriginal()=runBlocking {
         val app=context.applicationContext as WhisperApp;app.ready.await()
         val manager=ModelManager(context)
@@ -52,6 +66,12 @@ class SegmentRetryIntegrationTest {
             assertTrue(result.result.isNotEmpty())
             assertTrue(result.result.all {it.start>=1000 && it.end<=7000})
             assertEquals(note,app.repository.get(id))
+            withTimeout(10000) {while(app.transcription.state.value.operation!=null) delay(50)}
+            assertEquals(model.id,app.transcription.state.value.model)
+            app.transcription.unload()
+            withTimeout(10000) {while(app.transcription.state.value.operation!=null) delay(50)}
+            assertNull(app.transcription.state.value.model)
+            assertEquals("Unloading must preserve the pending suggestion",result,app.retries.get(id))
             app.repository.update(id) {it.acceptRetry(result,false)}
             assertEquals(original.id,app.repository.get(id)!!.segments.single().id)
             assertEquals(11000L,app.repository.get(id)!!.checkpointMs)

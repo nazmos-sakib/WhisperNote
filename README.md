@@ -62,7 +62,7 @@ The connected test copies the upstream JFK WAV sample, decodes it, downloads Tin
 - Large recordings require temporary disk space (~230 MB/hour of PCM) and sufficient RAM for the selected model. Small can be impractical on low-memory phones. Processing speed and accuracy depend on the device, language, and recording.
 - Android can terminate work because of force-stop, low memory, or foreground-service time limits. Audio and finalized segments are preserved. Interrupted notes show the saved audio timestamp and a Resume button. Resume decodes the source again, reloads the model, and infers only the audio after the last saved segment. Previously saved text and edits are retained. An unfinished segment is recomputed; progress percentages are never used as checkpoints.
 - Model downloads restart after interruption rather than resume. No background boot auto-start is attempted.
-- Recording, diarization, word timestamps, sync, summaries, and tags remain extension points.
+- Automatic speaker detection, word timestamps, sync and summaries remain extension points. See the 1.1 implementation notes below for recording and long-audio controls.
 
 ### Verified on 2026-09-15
 
@@ -216,3 +216,20 @@ The selected-word lookup and five-minute background timeout passed local debug b
 The Jekyll website lives in `docs/`, using the Cayman theme with a shared, responsive layout. It includes an app overview, real demonstration screenshots, and a separate privacy policy with the maintainer’s contact email. See [website setup](docs/SETUP.md) for local preview and publishing instructions.
 
 After pushing, select **Settings → Pages → Deploy from a branch → main → /docs**. The intended URLs are `https://nazmos-sakib.github.io/WhisperNote/` and `https://nazmos-sakib.github.io/WhisperNote/privacy/`. Verify the deployment before adding the privacy URL to Play Console.
+
+
+## Version 1.1 implementation (2026-10-12)
+
+This working tree adds the seven planned improvements. Device validation is still required before publishing.
+
+- **Recording:** New transcription → Record audio. Grant microphone access, then pause/resume or stop from the library or recording notification. Stop saves an owned AAC/M4A recording and queues transcription. If the selected model is unavailable, the saved audio remains available for retry. Recording and transcription use separate foreground services. Abrupt process termination during recording can leave an unfinished M4A file; crash-recoverable recording is not claimed.
+- **Bookmarks:** Open Bookmarks below the player, optionally enter a comment, and bookmark the current playback position. Select a bookmark to play from its timestamp; remove individual bookmarks from the same dialog.
+- **Library backup:** Drawer → Back up library / Restore library. ZIP backups include all notes with their original audio, timestamps, labels (including empty labels), bookmarks and saved translations. Restores validate and stage every note before a database transaction, assign new IDs, and add copies without overwriting existing notes. Backups omit model binaries and device-only listening positions. Missing source audio prevents a complete backup and reports an error. Large libraries require staging storage.
+- **Incoming audio:** Android's share sheet can send audio, Ogg or MP4 to WhisperNote. Confirm the model in the import dialog. Complete-note sharing remains supported.
+- **Saved translations:** Save translations below the player persists completed segment results. Saved results appear under the relevant segment, survive navigation, and export using the TRANSLATED option as bilingual text. Editing the source invalidates that segment's saved translations. Complete-note and library archives include saved results; selected-word lookups remain temporary.
+- **Transcript navigation:** Find provides an editable query, matching-segment count, and previous/next navigation. Counts represent matching segments, not individual word occurrences.
+- **Long audio:** Pause transcription preserves finalized segments; Resume continues from the checkpoint. Process next prioritizes a note, interrupts the current full transcription, and automatically requeues it. When other work is waiting, long transcriptions yield after a finalized segment at roughly five minutes of additional audio. Prepared PCM is reused within the live service and removed when work finishes or the service shuts down. Recovery after process death still decodes the original source again. Model downloads run separately from the transcription worker. Estimates use committed audio progress and elapsed time; they are approximate and restart after switching jobs. Fast/Balanced/Accurate select Compact Tiny/Base/Small. Optional speech detection in Models uses Silero v5.1.2 with a pinned revision, byte count and SHA-256 check; it preserves original timestamps through upstream mapping. It can miss quiet speech and consume additional memory, so it defaults off.
+
+Progress-only updates no longer rewrite the complete note document. Saving a note updates the in-memory library without re-reading every database row. The display's keep-awake behavior is now an optional drawer setting, defaulting off.
+
+No long-recording speedup factor is claimed. Validate on a disposable emulator or dedicated test device: microphone permission denial, pause/resume with screen locked, interruption while recording, queued short notes during a long recording, pause during decode/inference, process restart, VAD with quiet speech/silence, bookmark persistence, backup failure cleanup, archive compatibility, translated exports, and next/previous search navigation. Never run connected-test installation/cleanup on an installation holding personal notes.

@@ -1,0 +1,33 @@
+Long-form listening and transcription model lifecycle — 2026-09-22
+
+Implementation
+- Existing playback preferences now retain independent listening completion state;
+  cards observe progress, and Details offers manual completion/uncompletion.
+- MediaPlayer completion marks genuine playback completion; replay restarts at zero.
+- Details has a scroll-to-top FAB, model toolbar state, and model/retry bottom sheets.
+- Application-owned TranscriptionSession retains one native Whisper context, serializes
+  model operations, and applies monotonic foreground/background idle deadlines.
+- SegmentRetries remains the durable suggestion store. Its atomic start gate prevents
+  multiple retries or starting before a previous suggestion is reviewed.
+- Existing service ownership, cancellation, comparison, acceptance and rejection remain.
+- Background completion posts a notification linking to the note. Notification failure
+  cannot invalidate a saved result. Permission is requested when starting a retry.
+
+Verification
+- Debug APK built successfully, including arm64-v8a and x86_64 native libraries.
+- 34 JVM unit tests passed, including foreground idle reset, background return,
+  and deferred unload while an operation is active.
+- 16 Android device tests passed on A015 / Android 16:
+  DetailInteractionTest, SegmentRetryUiTest, PlaybackResumeTest,
+  SegmentRetryIntegrationTest.
+- Device checks include toolbar priority after model unloading, FAB visibility and
+  return to top, existing follow/seek/speed interactions, persisted listening state,
+  natural playback completion/replay, draft recovery, atomic cross-note retry gating,
+  actual bounded native inference, and retaining a suggestion after native unloading.
+- Native test used Tiny Q5_1, verified against the existing model catalog SHA-256.
+- git diff --check passed.
+
+Manual checks remaining
+- Notification display/tap with notification permission granted and the app backgrounded.
+- Actual five-/ten-minute waits, including device sleep. Automated deadline tests use
+  a controlled monotonic clock instead of waiting in real time.

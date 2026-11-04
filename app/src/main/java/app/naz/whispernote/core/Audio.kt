@@ -46,7 +46,7 @@ object Downloader {
 
 /** Streaming decoder and continuous linear resampler. PCM is spooled to disk, not a huge JVM array. */
 class AudioDecoder(private val context: Context) {
-    suspend fun decode(uri: Uri, output: File, startMs: Long = 0, endMs: Long = Long.MAX_VALUE): Long {
+    suspend fun decode(uri: Uri, output: File, startMs: Long = 0, endMs: Long = Long.MAX_VALUE, cancelled: () -> Boolean = {false}): Long {
         require(startMs>=0 && endMs>startMs)
         val firstSample=startMs*16
         val lastSample=if(endMs==Long.MAX_VALUE) Long.MAX_VALUE else endMs*16
@@ -75,6 +75,7 @@ class AudioDecoder(private val context: Context) {
                     previous=v; index++
                 }
                 while(!outputDone) {
+                    check(!cancelled()) {"Audio preparation paused."}
                     currentCoroutineContext().ensureActive()
                     if(!inputDone) {
                         val i=decoder.dequeueInputBuffer(10000)

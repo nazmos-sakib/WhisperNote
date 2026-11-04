@@ -9,6 +9,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROCESSING" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <queries>
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT" />
@@ -25,6 +27,7 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.WhisperNote">
+        <service android:name=".core.RecordingService" android:exported="false" android:foregroundServiceType="microphone" />
         <service android:name=".core.PlaybackService" android:exported="false" android:foregroundServiceType="mediaPlayback" />
         <service android:name=".core.ProcessingService" android:exported="false" android:foregroundServiceType="dataSync|mediaProcessing" />
         <provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.files" android:exported="false" android:grantUriPermissions="true"><meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/file_paths" /></provider>
@@ -37,6 +40,13 @@
                 <action android:name="android.intent.action.MAIN" />
 
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="audio/*" />
+                <data android:mimeType="video/mp4" />
+                <data android:mimeType="application/ogg" />
             </intent-filter>
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />

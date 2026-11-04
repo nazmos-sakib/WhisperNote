@@ -20,7 +20,7 @@ Once the required models are downloaded, these processing features work offline.
 
 WhisperNote stores note titles, transcripts, timestamps, labels, processing status and preferences in private app storage. It also stores listening positions, downloaded model files, and temporary processing files. Audio may be accessed through the file provider you choose or copied into the app’s private storage. Importing a complete note creates a local audio copy. A selected file provider may itself use cloud storage.
 
-Built-in translation results are temporary. They are not saved into notes, text exports or complete-note archives. Leaving the note or losing the app process clears them; dismissing a word lookup discards that lookup. Background transcription and audio playback can continue while you use other apps. Translation clients are deactivated after five continuous minutes in the background, subject to Android scheduling and process lifetime.
+Built-in translation results are temporary unless you select **Save translations**. Saved segment translations remain with the note and are included in translation exports, complete-note archives, and library backups. Unsaved results are cleared when you leave the note or lose the app process; dismissing a word lookup discards that lookup. Microphone recording is started by you, uses a visible recording notification, and saves audio locally. Bookmarks and comments are stored with their note. Background transcription and audio playback can continue while you use other apps. Translation clients are deactivated after five continuous minutes in the background, subject to Android scheduling and process lifetime.
 
 ## Downloads and network services
 
@@ -44,7 +44,7 @@ WhisperNote cannot delete copies already exported, shared or copied into another
 
 Saved notes remain in private app storage until you delete them or clear that storage. Deleting a note removes its saved transcript and allows you to delete audio owned by the app. External source files are not deleted. Downloaded packs can be removed from the model screens. Temporary files may remain in app cache until cleaned up by the app or Android.
 
-Automatic backup and device migration of private app data are disabled. Uninstalling WhisperNote or clearing its storage removes its private notes and files. Export complete notes to a separate location if you want a backup. Files exported elsewhere remain there until you delete them separately.
+Automatic backup and device migration of private app data are disabled. Uninstalling WhisperNote or clearing its storage removes its private notes and files. Export complete notes or use **Back up library** to save a backup to a separate location. Library backups contain original audio, transcripts, bookmarks, saved translations and labels. Files exported elsewhere remain there until you delete them separately.
 
 The maintainer does not hold a server-side copy of your local note library and cannot retrieve it for you. Privacy requests concerning information you send directly to the maintainer can be made using the contact email above. Please do not send sensitive recordings unless necessary for your request.
 
