@@ -45,11 +45,14 @@ home: true
   </div>
   <aside class="demo-column" aria-label="App demonstration">
     <figure class="app-demo">
-      <video autoplay muted loop controls playsinline preload="metadata" poster="{{ '/assets/screenshots/home-screen.png' | relative_url }}" aria-label="WhisperNote app demonstration">
+      <figcaption class="demo-audio" data-playing="false">
+        <span class="demo-audio-status" role="status"><span class="demo-speaker" aria-hidden="true">♫</span><span id="demo-status">App demo · Ready to play</span></span>
+        <button type="button" id="demo-sound" hidden>Play demo with sound</button>
+      </figcaption>
+      <video loop controls playsinline preload="metadata" poster="{{ '/assets/screenshots/home-screen.png' | relative_url }}" aria-label="WhisperNote app demonstration">
         <source src="{{ '/assets/screenshots/screen-recorder.mp4' | relative_url }}" type="video/mp4">
         <a href="{{ '/assets/screenshots/screen-recorder.mp4' | relative_url }}">Open the MP4 demonstration</a>.
       </video>
-      <figcaption><span>Follow along in the app.</span><button type="button" id="demo-sound" aria-pressed="false" hidden>Turn sound on</button></figcaption>
     </figure>
   </aside>
   </div>

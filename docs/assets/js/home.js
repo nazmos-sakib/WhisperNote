@@ -3,49 +3,77 @@
   const video = document.querySelector('.app-demo video');
   const section = document.querySelector('#features');
   const sound = document.querySelector('#demo-sound');
+  const status = document.querySelector('#demo-status');
+  const indicator = document.querySelector('.demo-audio');
   let sectionVisible = false;
+  let videoVisible = false;
   let userPaused = false;
   let automaticPause = false;
+  let playing = false;
+  let blocked = false;
 
+  function updateSound() {
+    const audible = !video.muted && video.volume > 0;
+    indicator.dataset.playing = String(playing && audible);
+    status.textContent = blocked ? 'App demo · Tap to hear the demo' :
+      playing ? (audible ? 'App demo sound is playing' : 'App demo · Sound off') : 'App demo · Paused';
+    sound.textContent = video.paused ? 'Play demo with sound' : audible ? 'Mute' : 'Turn sound on';
+  }
+  function playDemo() {
+    blocked = false;
+    video.play().catch((error) => {
+      if (error.name === 'NotAllowedError') blocked = true;
+      playing = false;
+      updateSound();
+    });
+  }
   function syncVideo() {
-    if (!sectionVisible || document.hidden || reducedMotion.matches || userPaused) {
+    if (!sectionVisible || !videoVisible || document.hidden || reducedMotion.matches || userPaused) {
       if (!video.paused) {
         automaticPause = true;
         video.pause();
       }
     } else {
-      video.play().catch(() => { /* Native controls remain available if autoplay is blocked. */ });
+      playDemo();
     }
   }
   if (video && section) {
-    if (!video.paused) { automaticPause = true; video.pause(); }
+    // Playback starts here, only in view, rather than on initial page load.
+    video.muted = false;
     video.addEventListener('pause', () => {
       if (!automaticPause && sectionVisible && !document.hidden) userPaused = true;
       automaticPause = false;
+      playing = false;
+      updateSound();
     });
-    video.addEventListener('play', () => { userPaused = false; });
+    video.addEventListener('play', () => { userPaused = false; blocked = false; updateSound(); });
+    video.addEventListener('playing', () => { playing = true; updateSound(); });
+    video.addEventListener('waiting', () => { playing = false; updateSound(); });
     new IntersectionObserver(([entry]) => {
       sectionVisible = entry.isIntersecting;
       syncVideo();
     }).observe(section);
+    new IntersectionObserver(([entry]) => {
+      videoVisible = entry.isIntersecting;
+      syncVideo();
+    }).observe(video);
     sound.hidden = false;
-    const updateSound = () => {
-      const audible = !video.muted && video.volume > 0;
-      sound.textContent = audible ? 'Mute sound' : 'Turn sound on';
-      sound.setAttribute('aria-pressed', String(audible));
-    };
     sound.addEventListener('click', () => {
-      video.muted = !video.muted && video.volume > 0;
-      if (!video.muted) {
+      if (video.paused) {
+        video.muted = false;
         if (video.volume === 0) video.volume = 1;
         userPaused = false;
-        video.play().catch(() => {});
+        playDemo();
+      } else {
+        video.muted = !video.muted && video.volume > 0;
+        if (!video.muted && video.volume === 0) video.volume = 1;
       }
       updateSound();
     });
     video.addEventListener('volumechange', updateSound);
     document.addEventListener('visibilitychange', syncVideo);
     reducedMotion.addEventListener('change', syncVideo);
+    updateSound();
   }
 
   const track = document.querySelector('#screenshot-track');
